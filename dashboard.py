@@ -1,27 +1,8 @@
-import datetime
-import sys
-import traceback
-
 from PySide2.QtCore import Qt
-from PySide2.QtGui import (QPainter,
-                           QColor,
-                           QTextCursor,
-                           QFont)
-from PySide2.QtWidgets import (QMainWindow,
-                               QWidget,
-                               QFrame,
-                               QDesktopWidget,
-                               QGridLayout,
-                               QLabel,
-                               QTextEdit,
-                               QPlainTextEdit,
-                               QSplitter,
-                               QSizePolicy,
-                               QSlider,
-                               QVBoxLayout,
-                               QHBoxLayout)
+from PySide2.QtWidgets import (QDesktopWidget, QFrame, QGridLayout, QLabel, QSizePolicy, QSlider, QSplitter, QVBoxLayout, QWidget)
 
-from widgets import StreamInput, StreamOutput, StreamError, SimulatedFieldMap
+from widgets import Minimap, StreamError, StreamInput, StreamOutput
+
 
 class Simulator(QWidget):
     def __init__(self):
@@ -37,7 +18,7 @@ class Simulator(QWidget):
         self.grid = QGridLayout()
         self.frame.setLayout(self.grid)
         self.setLayout(self.grid)
-        self.map = SimulatedFieldMap()
+        self.map = Minimap()
         
         # -- setting splitters
         splitter_bottom = QSplitter(Qt.Horizontal)  # STDIN, STDOUT
