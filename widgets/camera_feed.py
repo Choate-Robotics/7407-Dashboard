@@ -10,7 +10,7 @@ import traceback
 from collections import deque
 from io import BytesIO
 
-from PIL import Image,ImageFile
+from PIL import Image, ImageFile
 from PySide2.QtCore import QObject, Qt, Signal
 from PySide2.QtGui import QImage, QPixmap
 from PySide2.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QTabWidget, QVBoxLayout, QWidget)
@@ -19,12 +19,12 @@ IMAGE_BUFFER_SIZE = 1024
 REMOTE_IP_ADDR = '10.9.5.107'  # '10.74.7.4'
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 
-DEFAULT_IMAGE_QUALITY = 25
-DEFAULT_RESOLUTION = 240
 
 DEBUG = True
 
-ImageFile.LOAD_TRUNCATED_IMAGES=True
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
 class Signals(QObject):
     imageReady = Signal(QImage)
     updateStatus = Signal(int, int, int)  # total,server process time, client time
@@ -113,6 +113,7 @@ class FrameRateMonitor(metaclass=SingletonMeta):  # not really a subclass, but t
             v += getattr(self, 'cam%d' % i)
         return v / self._n_camera
 
+
 class FrameDropMonitor(metaclass=SingletonMeta):
     cam0 = RateTracker(10)
     cam1 = RateTracker(10)
@@ -142,20 +143,20 @@ class FeedReceiver(threading.Thread):
         self.signals.frameResize.connect(self.updateFrameSize)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind(('0.0.0.0', 5801 + self.camera_id))
-            #sock.sendto(FRAME_START_IDENTIFIER, (REMOTE_IP_ADDR, 5800))
+            # sock.sendto(FRAME_START_IDENTIFIER, (REMOTE_IP_ADDR, 5800))
             while True:
                 try:
                     header = sock.recv(40)
                     while header[:10] != FRAME_START_IDENTIFIER:
-                        #print('Waiting for frame start')
+                        # print('Waiting for frame start')
                         header = sock.recv(40)
                     n_packets, frame_id, time_started, server_time = struct.unpack('>IIdd', header[10:])
-                    #print(n_packets, frame_id, time_started, server_time)
+                    # print(n_packets, frame_id, time_started, server_time)
                     buf = bytes()
                     check = True
                     for i in range(n_packets):
                         packet = sock.recv(1024)
-                        if int.from_bytes(packet[0:4],'big') != i:
+                        if int.from_bytes(packet[0:4], 'big') != i:
                             check = False
                         buf += packet[4:]
                     if check:
@@ -173,10 +174,8 @@ class FeedReceiver(threading.Thread):
                                 (time.time() - client_started) * 1000,
                         )
                 except:
-                    print(traceback.format_exc(),file=sys.stderr)
+                    print(traceback.format_exc(), file=sys.stderr)
                     setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
-                    
-                
     
     def updateFrameSize(self, new_width):
         self.width = new_width
@@ -195,7 +194,6 @@ class CameraFeed(QWidget):
         self.box.addWidget(self.video_frame)
         self.box.setContentsMargins(0, 0, 0, 0)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
     
     def startReceiving(self):
         self.feed_receiver = FeedReceiver(self, self.id)
@@ -227,7 +225,7 @@ class Configuration(metaclass=SingletonMeta):
         self.lock.acquire()
         self.sock.connect((REMOTE_IP_ADDR, 5800))
         self.lock.release()
-        self.configs = {'cam%d' % i: {'resolution': DEFAULT_RESOLUTION, 'quality': DEFAULT_IMAGE_QUALITY} for i in range(n_camera)}
+        self.configs = CONFIGURATIONS['cameras']
     
     def update_config(self, cam_num, resolution, quality):
         print(f'Updating for {cam_num}, res: {resolution}, qual: {quality}')
@@ -250,6 +248,8 @@ class CameraFeedEnclosing(QWidget):
     def __init__(self, id, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.id = id
+        self.image_quality=CONFIGURATIONS['cameras']['cam%d'%id]['quality']
+        self.image_resolution = CONFIGURATIONS['cameras']['cam%d' % id]['resolution']
         
         self.box = QVBoxLayout()
         self.setLayout(self.box)
@@ -268,6 +268,7 @@ class CameraFeedEnclosing(QWidget):
         self.tabs.addTab(self.status, 'Status')
         
         self.camera_feed.feed_receiver.signals.updateStatus.connect(self.updateStatus)
+        
     
     def initStatus(self):
         self.status_layout = QGridLayout()
@@ -289,7 +290,7 @@ class CameraFeedEnclosing(QWidget):
         self.traffic = QLabel()
         self.traffic.setText('0.000 KB/s')
         
-        self.frame_drop=QLabel()
+        self.frame_drop = QLabel()
         self.frame_drop.setText('0 FPS')
         
         # self.status_layout.addWidget(self.fps, 0, 0)
@@ -312,25 +313,25 @@ class CameraFeedEnclosing(QWidget):
         self.status_layout.addWidget(QLabel("Frame Rate"), 5, 0)
         self.status_layout.addWidget(self.fps, 5, 1)
         
-        self.status_layout.addWidget(QLabel("Frame Drop"),6,0)
-        self.status_layout.addWidget(self.frame_drop,6,1)
+        self.status_layout.addWidget(QLabel("Frame Drop"), 6, 0)
+        self.status_layout.addWidget(self.frame_drop, 6, 1)
         
         self.quality_slider = QSlider(Qt.Horizontal)
         self.quality_slider.setMinimum(1)
         self.quality_slider.setMaximum(80)
         self.quality_slider.setSingleStep(1)
-        self.quality_slider.setValue(DEFAULT_IMAGE_QUALITY)
+        self.quality_slider.setValue(self.image_quality)
         
-        self.quality_label = QLabel(str(DEFAULT_IMAGE_QUALITY))
+        self.quality_label = QLabel(str(self.image_quality))
         self.quality_slider.valueChanged.connect(lambda n: self.quality_label.setText(str(n)))
         
         self.resolution_slider = QSlider(Qt.Horizontal, )
         self.resolution_slider.setMinimum(120)
         self.resolution_slider.setMaximum(1080)
         self.resolution_slider.setSingleStep(120)
-        self.resolution_slider.setValue(DEFAULT_RESOLUTION)
+        self.resolution_slider.setValue(self.image_resolution)
         
-        self.resolution_label = QLabel(str(DEFAULT_RESOLUTION))
+        self.resolution_label = QLabel(str(self.image_resolution))
         self.resolution_slider.valueChanged.connect(lambda n: self.resolution_label.setText(str(n)))
         
         self.status_layout.addWidget(QLabel("Image Quality"), 7, 0, columnspan=2)
@@ -342,8 +343,9 @@ class CameraFeedEnclosing(QWidget):
         self.status_layout.addWidget(self.resolution_label, 10, 1)
         
         self.apply_button = QPushButton("Apply")
-        self.status_layout.addWidget(self.apply_button,11,1)
-        self.apply_button.clicked.connect( lambda e: Configuration().update_config(self.id,self.resolution_slider.value(),self.quality_slider.value()) )
+        self.status_layout.addWidget(self.apply_button, 11, 1)
+        self.apply_button.clicked.connect(
+            lambda e: Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value()))
     
     def updateStatus(self, total, server, client):
         self.totalTime.setText('{: <4} ms'.format(str(total)))
@@ -357,9 +359,37 @@ class CameraFeedEnclosing(QWidget):
 
 if __name__ == '__main__':
     from PySide2.QtWidgets import QApplication
-    import signal
+    import signal,os
+
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+    try:
+        configs_file = open("configs.json", 'r')
+        CONFIGURATIONS = json.loads(configs_file.read())
+        configs_file.close()
+    except FileNotFoundError:
+        CONFIGURATIONS = {
+            'cameras': {
+                'cam0': {
+                    'resolution': 240,
+                    'quality'   : 25
+                },
+                'cam1': {
+                    'resolution': 240,
+                    'quality'   : 25
+                },
+                'cam2': {
+                    'resolution': 240,
+                    'quality'   : 25
+                },
+                'cam3': {
+                    'resolution': 240,
+                    'quality'   : 25
+                }
+            }
+        }
     
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    #signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication([])
     
     app.setStyle('Fusion')
@@ -371,6 +401,11 @@ if __name__ == '__main__':
     en.show()
     try:
         Configuration(1)
-        app.exec_()
+        exit(app.exec_())
     finally:
         Configuration().close()
+        configs_file=open("configs.json",'w+')
+        configs_file.write(json.dumps({'cameras':Configuration().configs}))
+        configs_file.close()
+        print('Config saved',flush=True)
+        
