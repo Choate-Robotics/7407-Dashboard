@@ -13,7 +13,7 @@ from io import BytesIO
 from PIL import Image, ImageFile
 from PySide2.QtCore import QObject, Qt, Signal
 from PySide2.QtGui import QImage, QPixmap
-from PySide2.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QTabWidget, QVBoxLayout, QWidget)
+from PySide2.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QTabWidget, QVBoxLayout, QWidget,QSplitter)
 
 IMAGE_BUFFER_SIZE = 1024
 REMOTE_IP_ADDR = '10.9.5.107'  # '10.74.7.4'
@@ -148,7 +148,7 @@ class FeedReceiver(threading.Thread):
                 try:
                     header = sock.recv(40)
                     while header[:10] != FRAME_START_IDENTIFIER:
-                        # print('Waiting for frame start')
+                        #print('Waiting for frame start')
                         header = sock.recv(40)
                     n_packets, frame_id, time_started, server_time = struct.unpack('>IIdd', header[10:])
                     # print(n_packets, frame_id, time_started, server_time)
@@ -191,6 +191,8 @@ class CameraFeed(QWidget):
         self.video_frame.setScaledContents(True)
         self.video_frame.setMinimumSize(1, 1)
         self.video_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(1, 1)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.box.addWidget(self.video_frame)
         self.box.setContentsMargins(0, 0, 0, 0)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -211,10 +213,6 @@ class CameraFeed(QWidget):
         img.fill(2)
         self.updateImage(img)
     
-    # def resizeEvent(self, event):
-    #     self.feed_receiver.signals.frameResize.emit(self.frameGeometry().width())
-    #     #self.setVideoFramePlaceHolder()
-    #     event.accept()
 
 
 class Configuration(metaclass=SingletonMeta):
@@ -222,11 +220,13 @@ class Configuration(metaclass=SingletonMeta):
         self.n_camera = n_camera
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.lock = threading.Lock()
+        self.configs = CONFIGURATIONS['cameras']
+    
+    def connect(self):
         self.lock.acquire()
         self.sock.connect((REMOTE_IP_ADDR, 5800))
         self.lock.release()
-        self.configs = CONFIGURATIONS['cameras']
-    
+        
     def update_config(self, cam_num, resolution, quality):
         print(f'Updating for {cam_num}, res: {resolution}, qual: {quality}')
         try:
@@ -242,9 +242,12 @@ class Configuration(metaclass=SingletonMeta):
     
     def close(self):
         self.sock.close()
+        configs_file = open("configs.json", 'w+')
+        configs_file.write(json.dumps({'cameras': self.configs}))
+        configs_file.close()
 
 
-class CameraFeedEnclosing(QWidget):
+class Camera(QWidget):
     def __init__(self, id, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.id = id
@@ -255,9 +258,8 @@ class CameraFeedEnclosing(QWidget):
         self.setLayout(self.box)
         
         self.tabs = QTabWidget()
-        
+
         self.camera_feed = CameraFeed(self.id)
-        self.camera_feed.startReceiving()
         
         self.status = QFrame()
         self.initStatus()
@@ -267,8 +269,9 @@ class CameraFeedEnclosing(QWidget):
         self.tabs.addTab(self.camera_feed, 'Camera')
         self.tabs.addTab(self.status, 'Status')
         
-        self.camera_feed.feed_receiver.signals.updateStatus.connect(self.updateStatus)
         
+        self.setMinimumSize(1, 1)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     
     def initStatus(self):
         self.status_layout = QGridLayout()
@@ -356,10 +359,55 @@ class CameraFeedEnclosing(QWidget):
         self.fps.setText('{: <4} FPS'.format(str(round(getattr(FrameRateMonitor(), 'cam%d' % self.id), 1))))
         self.frame_drop.setText('{: <4} FPS'.format(str(round(getattr(FrameDropMonitor(), 'cam%d' % self.id), 1))))
 
+    def startReceiving(self):
+        
+        self.camera_feed.startReceiving()
+        self.camera_feed.feed_receiver.signals.updateStatus.connect(self.updateStatus)
+
+class CameraPanel(QWidget):
+    def __init__(self,n_camera,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.cameras=[]
+        self.box=QVBoxLayout()
+        self.setLayout(self.box)
+        
+        for i in range(n_camera):
+            self.cameras.append(Camera(i))
+        Configuration(n_camera)
+        main_splitter=QSplitter(Qt.Vertical)
+        main_splitter.addWidget(self.cameras[0])
+        if n_camera==2:
+            main_splitter.addWidget(self.cameras[1])
+        elif n_camera==3:
+            sub_splitter=QSplitter(Qt.Horizontal)
+            sub_splitter.addWidget(self.cameras[1])
+            sub_splitter.addWidget(self.cameras[2])
+            main_splitter.addWidget(sub_splitter)
+        elif n_camera==4:
+            sub_splitter = QSplitter(Qt.Horizontal)
+            sub_sub_splitter=QSplitter(Qt.Horizontal)
+            sub_splitter.addWidget(sub_sub_splitter)
+            sub_sub_splitter.addWidget(self.cameras[1])
+            sub_sub_splitter.addWidget(self.cameras[2])
+            sub_splitter.addWidget(self.cameras[3])
+            main_splitter.addWidget(sub_splitter)
+        
+        self.box.addWidget(main_splitter)
+        
+    def connectRemote(self):
+        """
+        This function blocks until TCP connection succeeds.
+        Call with caution
+        """
+        Configuration().connect()
+        for cam in self.cameras:
+            cam.startReceiving()
+        
+        
 
 if __name__ == '__main__':
     from PySide2.QtWidgets import QApplication
-    import signal,os
+    import os
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -393,19 +441,18 @@ if __name__ == '__main__':
     app = QApplication([])
     
     app.setStyle('Fusion')
-    TrafficMonitor(1)
-    FrameRateMonitor(1)
-    FrameDropMonitor(1)
-    en = CameraFeedEnclosing(0)
+    TrafficMonitor(3)
+    FrameRateMonitor(3)
+    FrameDropMonitor(3)
+    cp=CameraPanel(3)
     
-    en.show()
+    cp.connectRemote()
+    cp.show()
+    
+    
     try:
-        Configuration(1)
         exit(app.exec_())
     finally:
         Configuration().close()
-        configs_file=open("configs.json",'w+')
-        configs_file.write(json.dumps({'cameras':Configuration().configs}))
-        configs_file.close()
-        print('Config saved',flush=True)
+        
         
