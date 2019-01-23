@@ -7,18 +7,31 @@ import sys
 import threading
 import time
 import traceback
+import signal
 from collections import deque
 from io import BytesIO
 
 from PIL import Image, ImageFile
 from PySide2.QtCore import QObject, Qt, Signal
 from PySide2.QtGui import QImage, QPixmap
-from PySide2.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QTabWidget, QVBoxLayout, QWidget,QSplitter)
+from PySide2.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+    QSplitter,
+    QScrollArea
+)
 
 IMAGE_BUFFER_SIZE = 1024
 REMOTE_IP_ADDR = '10.9.5.107'  # '10.74.7.4'
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
-
 
 DEBUG = True
 
@@ -115,10 +128,10 @@ class FrameRateMonitor(metaclass=SingletonMeta):  # not really a subclass, but t
 
 
 class FrameDropMonitor(metaclass=SingletonMeta):
-    cam0 = RateTracker(10)
-    cam1 = RateTracker(10)
-    cam2 = RateTracker(10)
-    cam3 = RateTracker(10)
+    cam0 = RateTracker(2)
+    cam1 = RateTracker(2)
+    cam2 = RateTracker(2)
+    cam3 = RateTracker(2)
     
     def __init__(self, n_camera: int):
         self._n_camera = n_camera
@@ -144,14 +157,19 @@ class FeedReceiver(threading.Thread):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind(('0.0.0.0', 5801 + self.camera_id))
             # sock.sendto(FRAME_START_IDENTIFIER, (REMOTE_IP_ADDR, 5800))
+            last_frame_id=0
             while True:
                 try:
                     header = sock.recv(40)
                     while header[:10] != FRAME_START_IDENTIFIER:
-                        #print('Waiting for frame start')
+                        # print('Waiting for frame start')
                         header = sock.recv(40)
                     n_packets, frame_id, time_started, server_time = struct.unpack('>IIdd', header[10:])
-                    # print(n_packets, frame_id, time_started, server_time)
+                    if frame_id==last_frame_id+1:
+                        last_frame_id+=1
+                    else:
+                        setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
+                        last_frame_id=frame_id
                     buf = bytes()
                     check = True
                     for i in range(n_packets):
@@ -173,6 +191,8 @@ class FeedReceiver(threading.Thread):
                                 server_time * 1000,
                                 (time.time() - client_started) * 1000,
                         )
+                    else:
+                        setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
                 except:
                     print(traceback.format_exc(), file=sys.stderr)
                     setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
@@ -180,6 +200,11 @@ class FeedReceiver(threading.Thread):
     def updateFrameSize(self, new_width):
         self.width = new_width
 
+class Indicator(QWidget):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+    
+    
 
 class CameraFeed(QWidget):
     def __init__(self, id, *args, **kwargs):
@@ -212,7 +237,6 @@ class CameraFeed(QWidget):
         img = QImage(self.feed_receiver.width, self.feed_receiver.width // 16 * 9, QImage.Format_Grayscale8)
         img.fill(2)
         self.updateImage(img)
-    
 
 
 class Configuration(metaclass=SingletonMeta):
@@ -224,7 +248,9 @@ class Configuration(metaclass=SingletonMeta):
     
     def connect(self):
         self.lock.acquire()
+        self.sock.bind(('0.0.0.0',5800))
         self.sock.connect((REMOTE_IP_ADDR, 5800))
+        self.sock.send(json.dumps(self.configs).encode())
         self.lock.release()
         
     def update_config(self, cam_num, resolution, quality):
@@ -245,23 +271,30 @@ class Configuration(metaclass=SingletonMeta):
         configs_file = open("configs.json", 'w+')
         configs_file.write(json.dumps({'cameras': self.configs}))
         configs_file.close()
+        print("TCP Connection closed")
+
 
 
 class Camera(QWidget):
     def __init__(self, id, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.id = id
-        self.image_quality=CONFIGURATIONS['cameras']['cam%d'%id]['quality']
+        self.image_quality = CONFIGURATIONS['cameras']['cam%d' % id]['quality']
         self.image_resolution = CONFIGURATIONS['cameras']['cam%d' % id]['resolution']
         
         self.box = QVBoxLayout()
         self.setLayout(self.box)
         
         self.tabs = QTabWidget()
-
+        
         self.camera_feed = CameraFeed(self.id)
         
-        self.status = QFrame()
+        self.status_frame = QFrame()
+        self.status_frame.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed)
+        self.status_frame.setMinimumSize(250,280)
+        self.status=QScrollArea()
+        
+        self.status.setWidget(self.status_frame)
         self.initStatus()
         
         self.box.addWidget(self.tabs)
@@ -269,13 +302,12 @@ class Camera(QWidget):
         self.tabs.addTab(self.camera_feed, 'Camera')
         self.tabs.addTab(self.status, 'Status')
         
-        
         self.setMinimumSize(1, 1)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     
     def initStatus(self):
         self.status_layout = QGridLayout()
-        self.status.setLayout(self.status_layout)
+        self.status_frame.setLayout(self.status_layout)
         
         self.serverTime = QLabel()
         self.clientTime = QLabel()
@@ -348,7 +380,7 @@ class Camera(QWidget):
         self.apply_button = QPushButton("Apply")
         self.status_layout.addWidget(self.apply_button, 11, 1)
         self.apply_button.clicked.connect(
-            lambda e: Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value()))
+                lambda e: Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value()))
     
     def updateStatus(self, total, server, client):
         self.totalTime.setText('{: <4} ms'.format(str(total)))
@@ -358,34 +390,39 @@ class Camera(QWidget):
         self.traffic.setText('{: <4} KB/s'.format(str(round(getattr(TrafficMonitor(), 'cam%d' % self.id) / 1024, 1))))
         self.fps.setText('{: <4} FPS'.format(str(round(getattr(FrameRateMonitor(), 'cam%d' % self.id), 1))))
         self.frame_drop.setText('{: <4} FPS'.format(str(round(getattr(FrameDropMonitor(), 'cam%d' % self.id), 1))))
-
+    
     def startReceiving(self):
-        
         self.camera_feed.startReceiving()
         self.camera_feed.feed_receiver.signals.updateStatus.connect(self.updateStatus)
 
+
 class CameraPanel(QWidget):
-    def __init__(self,n_camera,*args,**kwargs):
-        super().__init__(*args,**kwargs)
-        self.cameras=[]
-        self.box=QVBoxLayout()
+    def __init__(self, n_camera, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cameras = []
+        self.box = QVBoxLayout()
         self.setLayout(self.box)
         
         for i in range(n_camera):
             self.cameras.append(Camera(i))
+            
         Configuration(n_camera)
-        main_splitter=QSplitter(Qt.Vertical)
+        TrafficMonitor(n_camera)
+        FrameRateMonitor(n_camera)
+        FrameDropMonitor(n_camera)
+        
+        main_splitter = QSplitter(Qt.Vertical)
         main_splitter.addWidget(self.cameras[0])
-        if n_camera==2:
+        if n_camera == 2:
             main_splitter.addWidget(self.cameras[1])
-        elif n_camera==3:
-            sub_splitter=QSplitter(Qt.Horizontal)
+        elif n_camera == 3:
+            sub_splitter = QSplitter(Qt.Horizontal)
             sub_splitter.addWidget(self.cameras[1])
             sub_splitter.addWidget(self.cameras[2])
             main_splitter.addWidget(sub_splitter)
-        elif n_camera==4:
+        elif n_camera == 4:
             sub_splitter = QSplitter(Qt.Horizontal)
-            sub_sub_splitter=QSplitter(Qt.Horizontal)
+            sub_sub_splitter = QSplitter(Qt.Horizontal)
             sub_splitter.addWidget(sub_sub_splitter)
             sub_sub_splitter.addWidget(self.cameras[1])
             sub_sub_splitter.addWidget(self.cameras[2])
@@ -394,6 +431,7 @@ class CameraPanel(QWidget):
         
         self.box.addWidget(main_splitter)
         
+    
     def connectRemote(self):
         """
         This function blocks until TCP connection succeeds.
@@ -402,15 +440,15 @@ class CameraPanel(QWidget):
         Configuration().connect()
         for cam in self.cameras:
             cam.startReceiving()
-        
-        
+
+
 
 if __name__ == '__main__':
     from PySide2.QtWidgets import QApplication
     import os
-
+    
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-
+    
     try:
         configs_file = open("configs.json", 'r')
         CONFIGURATIONS = json.loads(configs_file.read())
@@ -437,22 +475,24 @@ if __name__ == '__main__':
             }
         }
     
-    #signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication([])
     
     app.setStyle('Fusion')
-    TrafficMonitor(3)
-    FrameRateMonitor(3)
-    FrameDropMonitor(3)
-    cp=CameraPanel(3)
+
+    cp = CameraPanel(3)
     
     cp.connectRemote()
+    cp.setWindowFlag(Qt.WindowStaysOnTopHint)
     cp.show()
-    
+
+    def close_TCP(signum, frame):
+        Configuration().close()
+        
+    signal.signal(signal.SIGINT,close_TCP)
+    signal.signal(signal.SIGTERM, close_TCP)
+    signal.signal(signal.SIGQUIT, close_TCP)
     
     try:
         exit(app.exec_())
     finally:
         Configuration().close()
-        
-        
