@@ -8,11 +8,14 @@ import threading
 import time
 import traceback
 import signal
+import numpy as np
+import PySide2
+import pyqtgraph as pg
 from collections import deque
 from io import BytesIO
 
 from PIL import Image, ImageFile
-from PySide2.QtCore import QObject, Qt, Signal
+from PySide2.QtCore import QObject, Qt, Signal,QTimer
 from PySide2.QtGui import QImage, QPixmap
 from PySide2.QtWidgets import (
     QFrame,
@@ -37,6 +40,8 @@ DEBUG = True
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
 
 class Signals(QObject):
     imageReady = Signal(QImage)
@@ -245,12 +250,18 @@ class Configuration(metaclass=SingletonMeta):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.lock = threading.Lock()
         self.configs = CONFIGURATIONS['cameras']
+        self.is_connected=False
     
     def connect(self):
         self.lock.acquire()
         self.sock.bind(('0.0.0.0',5800))
         self.sock.connect((REMOTE_IP_ADDR, 5800))
+        if os.name=='nt': # Reset TCP connections instead of waiting for ACK from peer
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
+        else:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
         self.sock.send(json.dumps(self.configs).encode())
+        self.is_connected=True
         self.lock.release()
         
     def update_config(self, cam_num, resolution, quality):
@@ -267,12 +278,54 @@ class Configuration(metaclass=SingletonMeta):
         self.sock.sendall(json.dumps(d).encode())
     
     def close(self):
-        self.sock.close()
-        configs_file = open("configs.json", 'w+')
-        configs_file.write(json.dumps({'cameras': self.configs}))
-        configs_file.close()
-        print("TCP Connection closed")
+        if self.is_connected:
+            self.lock.acquire()
+            self.sock.close()
+            configs_file = open("configs.json", 'w+')
+            configs_file.write(json.dumps({'cameras': self.configs}))
+            configs_file.close()
+            print("TCP Connection closed")
+            self.is_connected=False
+            self.lock.release()
 
+class StatusPlotItem(pg.PlotItem):
+    def __init__(self,*args,arr_size=6000,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.arr_size=arr_size
+        self.setClipToView(True)
+        self.setDownsampling(mode='subsample')
+        self.setLabel('bottom','Time Since Connected')
+        self.curve=self.plot()
+        self.__x=np.full((self.arr_size,), np.inf, dtype=np.float)
+        self.__y=np.zeros((self.arr_size,), dtype=np.ushort)
+        self.setLimits(xMin=0)
+        self.index=0
+        self.time_started=None
+        
+    @property
+    def value(self):
+        return self.__y[-1]
+    
+    @value.setter
+    def value(self,v):
+        if self.time_started is None:
+            self.time_started=time.time()
+        self.__y[self.index]=v
+        self.__x[self.index]= time.time() - self.time_started
+        self.index+=1
+        if self.index==self.arr_size: # expends the array
+            self.arr_size+=1200 # 20 FPS for 60 seconds
+            new_x=np.empty((self.arr_size,),dtype=np.float)
+            new_x[:self.__x.shape[0]]=self.__x
+            new_y=np.empty((self.arr_size,),dtype=np.ushort)
+            new_y[:self.__y.shape[0]] = self.__y
+            self.__x=new_x
+            self.__y=new_y
+            
+            
+    def update(self):
+        self.curve.setData(self.__x, self.__y)
+    
 
 
 class Camera(QWidget):
@@ -293,17 +346,58 @@ class Camera(QWidget):
         self.status_frame.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed)
         self.status_frame.setMinimumSize(250,280)
         self.status=QScrollArea()
-        
         self.status.setWidget(self.status_frame)
         self.initStatus()
+        
+        self.network_graphs=pg.GraphicsLayoutWidget()
+        self.traffic_graphs=pg.GraphicsLayoutWidget()
+        self.frame_rate_graphs=pg.GraphicsLayoutWidget()
+        
+        self.traffic_plot=StatusPlotItem()
+        self.traffic_plot.setTitle("Traffic")
+        self.traffic_plot.setLabel("left",'Data Transmitted','KB/s')
+        self.traffic_graphs.addItem(self.traffic_plot,row=0,col=0)
+        
+        self.network_plot=StatusPlotItem()
+        self.network_plot.setTitle("Network Time")
+        self.network_plot.setLabel("left","Latency (ms)",)
+        self.network_graphs.addItem(self.network_plot,row=0,col=0)
+
+        self.client_time_plot=StatusPlotItem()
+        self.client_time_plot.setTitle("Client Time")
+        self.client_time_plot.setLabel("left","Latency (ms)",)
+        self.network_graphs.addItem(self.client_time_plot,row=0,col=1)
+
+        self.total_time_plot=StatusPlotItem()
+        self.total_time_plot.setTitle("Total Latency")
+        self.total_time_plot.setLabel("left","Latency (ms)",)
+        self.network_graphs.addItem(self.total_time_plot,row=0,col=2)
+
+        
+        self.frame_rate_plot=StatusPlotItem()
+        self.frame_rate_plot.setLabel('left','Frame Per Second')
+        self.frame_rate_plot.setTitle("Frame Rate")
+        self.frame_rate_graphs.addItem(self.frame_rate_plot,row=0,col=0)
+        
+        self.frame_drop_plot=StatusPlotItem()
+        self.frame_rate_plot.setLabel('left','Frame Per Second')
+        self.frame_drop_plot.setTitle('Frame Drop')
+        self.frame_rate_graphs.addItem(self.frame_drop_plot,row=0,col=1)
         
         self.box.addWidget(self.tabs)
         
         self.tabs.addTab(self.camera_feed, 'Camera')
         self.tabs.addTab(self.status, 'Status')
+        self.tabs.addTab(self.traffic_graphs,"Traffic")
+        self.tabs.addTab(self.network_graphs, "Network")
+        self.tabs.addTab(self.frame_rate_graphs, "Video")
         
         self.setMinimumSize(1, 1)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        self.timer=QTimer()
+        self.timer.timeout.connect(self.updateAllGraphs)
+        self.timer.start(100)
     
     def initStatus(self):
         self.status_layout = QGridLayout()
@@ -330,26 +424,26 @@ class Camera(QWidget):
         
         # self.status_layout.addWidget(self.fps, 0, 0)
         
-        self.status_layout.addWidget(QLabel("Traffic"), 0, 0)
-        self.status_layout.addWidget(self.traffic, 0, 1)
+        self.status_layout.addWidget(QLabel("Frame Rate"), 0, 0)
+        self.status_layout.addWidget(self.fps, 0, 1)
         
-        self.status_layout.addWidget(QLabel("Server"), 1, 0)
-        self.status_layout.addWidget(self.serverTime, 1, 1)
+        self.status_layout.addWidget(QLabel("Frame Drop"), 1, 0)
+        self.status_layout.addWidget(self.frame_drop, 1, 1)
         
-        self.status_layout.addWidget(QLabel("Client"), 2, 0)
-        self.status_layout.addWidget(self.clientTime, 2, 1)
+        self.status_layout.addWidget(QLabel("Server"), 2, 0)
+        self.status_layout.addWidget(self.serverTime, 2, 1)
         
-        self.status_layout.addWidget(QLabel("Network"), 3, 0)
-        self.status_layout.addWidget(self.networkTime, 3, 1)
+        self.status_layout.addWidget(QLabel("Client"), 3, 0)
+        self.status_layout.addWidget(self.clientTime, 3, 1)
         
-        self.status_layout.addWidget(QLabel("Total"), 4, 0)
-        self.status_layout.addWidget(self.totalTime, 4, 1)
+        self.status_layout.addWidget(QLabel("Network"), 4, 0)
+        self.status_layout.addWidget(self.networkTime, 4, 1)
         
-        self.status_layout.addWidget(QLabel("Frame Rate"), 5, 0)
-        self.status_layout.addWidget(self.fps, 5, 1)
+        self.status_layout.addWidget(QLabel("Total"), 5, 0)
+        self.status_layout.addWidget(self.totalTime, 5, 1)
         
-        self.status_layout.addWidget(QLabel("Frame Drop"), 6, 0)
-        self.status_layout.addWidget(self.frame_drop, 6, 1)
+        self.status_layout.addWidget(QLabel("Traffic"), 6, 0)
+        self.status_layout.addWidget(self.traffic, 6, 1)
         
         self.quality_slider = QSlider(Qt.Horizontal)
         self.quality_slider.setMinimum(1)
@@ -381,18 +475,44 @@ class Camera(QWidget):
         self.status_layout.addWidget(self.apply_button, 11, 1)
         self.apply_button.clicked.connect(
                 lambda e: Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value()))
+        
+    
     
     def updateStatus(self, total, server, client):
         self.totalTime.setText('{: <4} ms'.format(str(total)))
+        self.total_time_plot.value=total
+        
+        
         self.serverTime.setText('{: <4} ms'.format(str(server)))
+
         self.clientTime.setText('{: <4} ms'.format(str(client)))
+        self.client_time_plot.value = client
+        
         self.networkTime.setText('{: <4} ms'.format(str(total - server - client)))
+        self.network_plot.value=total - server - client
+        
         self.traffic.setText('{: <4} KB/s'.format(str(round(getattr(TrafficMonitor(), 'cam%d' % self.id) / 1024, 1))))
+        self.traffic_plot.value=getattr(TrafficMonitor(), 'cam%d' % self.id) / 1024
+        
         self.fps.setText('{: <4} FPS'.format(str(round(getattr(FrameRateMonitor(), 'cam%d' % self.id), 1))))
+        self.frame_rate_plot.value=getattr(FrameRateMonitor(), 'cam%d' % self.id)
+        
+        self.frame_drop_plot.value=getattr(FrameDropMonitor(), 'cam%d' % self.id)
         self.frame_drop.setText('{: <4} FPS'.format(str(round(getattr(FrameDropMonitor(), 'cam%d' % self.id), 1))))
+        
+        #self.updateAllGraphs()
     
+    def updateAllGraphs(self):
+        self.total_time_plot.update()
+        self.client_time_plot.update()
+        self.frame_rate_plot.update()
+        self.frame_drop_plot.update()
+        self.network_plot.update()
+        self.traffic_plot.update()
+        
     def startReceiving(self):
         self.camera_feed.startReceiving()
+        self.time_started = time.time()
         self.camera_feed.feed_receiver.signals.updateStatus.connect(self.updateStatus)
 
 
@@ -486,7 +606,10 @@ if __name__ == '__main__':
     cp.show()
 
     def close_TCP(signum, frame):
+        app.quit()
         Configuration().close()
+
+    
         
     signal.signal(signal.SIGINT,close_TCP)
     signal.signal(signal.SIGTERM, close_TCP)
