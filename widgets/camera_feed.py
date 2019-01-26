@@ -263,9 +263,15 @@ class Configuration(metaclass=SingletonMeta):
         self.lock.acquire()
         self.sock.bind(('0.0.0.0', 5800))
         print("TCP socket bound to port 5800")
-        print("Connecting to %s:5800"%REMOTE_IP_ADDR)
-        self.sock.connect((REMOTE_IP_ADDR, 5800))
-        print("Connected")
+        print("Connecting to %s:5800... "%REMOTE_IP_ADDR,end='')
+        try:
+            self.sock.connect((REMOTE_IP_ADDR, 5800))
+        except (TimeoutError,ConnectionRefusedError):
+            print("failed")
+            self.lock.release()
+            return False
+        else:
+            print("connected")
         if os.name == 'nt':  # Reset TCP connections instead of waiting for ACK from peer
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
         else:
@@ -273,6 +279,7 @@ class Configuration(metaclass=SingletonMeta):
         self.sock.send(json.dumps(self.configs).encode())
         self.is_connected = True
         self.lock.release()
+        return True
     
     def update_config(self, cam_num, resolution, quality):
         try:
@@ -569,10 +576,10 @@ class CameraPanel(QWidget):
         This function blocks until TCP connection succeeds.
         Call with caution
         """
-        Configuration().connect()
-        self.connectButton.hide()
-        for cam in self.cameras:
-            cam.startReceiving()
+        if Configuration().connect():
+            self.connectButton.hide()
+            for cam in self.cameras:
+                cam.startReceiving()
 
 
 if __name__ == '__main__':

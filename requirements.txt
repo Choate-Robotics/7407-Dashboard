@@ -1,0 +1,5 @@
+numpy==1.16.0
+Pillow==5.4.1
+pyqtgraph==0.11.0.dev0
+PySide2==5.11.2
+Shapely==1.6.4.post2
