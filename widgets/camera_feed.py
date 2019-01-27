@@ -161,6 +161,8 @@ class FeedReceiver(threading.Thread):
         self.camera_feed_widget = camera_feed
         self.signals = Signals()
         self.width = 960
+        self._terminate=False
+        app.aboutToQuit.connect(self.terminate)
     
     def run(self):
         self.signals.frameResize.connect(self.updateFrameSize)
@@ -169,7 +171,7 @@ class FeedReceiver(threading.Thread):
             print('UDP socket bound to port %d'%(5801 + self.camera_id))
             # sock.sendto(FRAME_START_IDENTIFIER, (REMOTE_IP_ADDR, 5800))
             last_frame_id = 0
-            while True:
+            while not self._terminate:
                 try:
                     header = sock.recv(40)
                     while header[:10] != FRAME_START_IDENTIFIER:
@@ -208,10 +210,14 @@ class FeedReceiver(threading.Thread):
                 except:
                     print(traceback.format_exc(), file=sys.stderr)
                     setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
+            else:
+                print("Receiver thread for camera %d terminated"%self.camera_id)
     
     def updateFrameSize(self, new_width):
         self.width = new_width
 
+    def terminate(self):
+        self._terminate=True
 
 class Indicator(QWidget):
     def __init__(self, *args, **kwargs):
@@ -263,7 +269,7 @@ class Configuration(metaclass=SingletonMeta):
         self.lock.acquire()
         self.sock.bind(('0.0.0.0', 5800))
         print("TCP socket bound to port 5800")
-        print("Connecting to %s:5800... "%REMOTE_IP_ADDR,end='')
+        print("Connecting to %s:5800..."%REMOTE_IP_ADDR,end='')
         try:
             self.sock.connect((REMOTE_IP_ADDR, 5800))
         except (TimeoutError,ConnectionRefusedError):
@@ -627,10 +633,10 @@ if __name__ == '__main__':
     
     def close_TCP(signum, frame):
         print("Signal %d received. Exiting..." %signum,flush=True)
-        Configuration().close()
         app.quit()
-        sys.exit(0)
-        #os.kill(mp.current_process().pid,signal.SIGKILL)
+        Configuration().close()
+
+
         
     
     
