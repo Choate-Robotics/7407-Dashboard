@@ -25,6 +25,9 @@ class StreamOutput(QTextEdit):
     
     def flush(self):
         pass
+    
+    def closeStream(self):
+        'write everything back'
 
 class StreamError(StreamOutput):
     def write(self, text):

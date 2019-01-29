@@ -33,11 +33,13 @@ from PySide2.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QSplitter,
-    QScrollArea
+    QScrollArea,
+    QComboBox,
+    QMessageBox
 )
 
 IMAGE_BUFFER_SIZE = 1024
-REMOTE_IP_ADDR = '10.9.5.5'  # '10.74.7.12'
+REMOTE_IP_ADDR = '10.9.5.5'#'10.5.5.100'  # '10.9.5.5'  # '10.74.7.12'
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
 
@@ -47,10 +49,9 @@ pg.setConfigOption('background', 'w')
 pg.setConfigOption('foreground', 'k')
 
 
-
 class Signals(QObject):
     imageReady = Signal(QImage)
-    updateStatus = Signal(int, int, int)  # total,server process time, client time
+    updateStatus = Signal(float, float, float)  # total,server process time, client time
     frameResize = Signal(int)
 
 
@@ -161,14 +162,15 @@ class FeedReceiver(threading.Thread):
         self.camera_feed_widget = camera_feed
         self.signals = Signals()
         self.width = 960
-        self._terminate=False
+        self._terminate = False
         app.aboutToQuit.connect(self.terminate)
     
     def run(self):
         self.signals.frameResize.connect(self.updateFrameSize)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind(('0.0.0.0', 5801 + self.camera_id))
-            print('UDP socket bound to port %d'%(5801 + self.camera_id))
+            sock.settimeout(1)
+            print('UDP socket bound to port %d' % (5801 + self.camera_id))
             # sock.sendto(FRAME_START_IDENTIFIER, (REMOTE_IP_ADDR, 5800))
             last_frame_id = 0
             while not self._terminate:
@@ -178,7 +180,7 @@ class FeedReceiver(threading.Thread):
                         # print('Waiting for frame start')
                         header = sock.recv(40)
                     n_packets, frame_id, time_started, server_time = struct.unpack('>IIdd', header[10:])
-
+                    
                     if frame_id == last_frame_id + 1:
                         last_frame_id += 1
                     else:
@@ -195,29 +197,34 @@ class FeedReceiver(threading.Thread):
                         client_started = time.time()
                         setattr(TrafficMonitor(), 'cam%d' % self.camera_id, len(buf))
                         setattr(FrameRateMonitor(), 'cam%d' % self.camera_id, 1)
+                        #cv2.imdecode(np.fromstring(buf,dtype=np.uint8))
                         img = Image.open(BytesIO(buf))
-                        aspect_ratio = img.size[0] / img.size[1]
-                        img = img.resize((int(self.width), int(self.width // aspect_ratio)), Image.BICUBIC)
+                        if img.size[0]%60!=0:
+                            aspect_ratio = img.size[0] / img.size[1]
+                            img = img.resize((int(self.width), int(self.width // aspect_ratio)), Image.BICUBIC)
                         img = QImage(img.tobytes('raw', 'RGB'), *img.size, QImage.Format_RGB888)
                         self.signals.imageReady.emit(img)
                         self.signals.updateStatus.emit(
-                                (time.time() - time_started) * 1000,  # multiply by 1000 to cast to milliseconds
-                                server_time * 1000,
-                                (time.time() - client_started) * 1000,
+                                round((time.time() - time_started) * 1000,2),  # multiply by 1000 to cast to milliseconds
+                                round(server_time * 1000,2),
+                                round((time.time() - client_started) * 1000,2)
                         )
                     else:
                         setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
+                except socket.timeout:
+                    Configuration().reconnect()
                 except:
                     print(traceback.format_exc(), file=sys.stderr)
                     setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
             else:
-                print("Receiver thread for camera %d terminated"%self.camera_id)
+                print("Receiver thread for camera %d terminated" % self.camera_id)
     
     def updateFrameSize(self, new_width):
         self.width = new_width
-
+    
     def terminate(self):
-        self._terminate=True
+        self._terminate = True
+
 
 class Indicator(QWidget):
     def __init__(self, *args, **kwargs):
@@ -263,17 +270,22 @@ class Configuration(metaclass=SingletonMeta):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.lock = threading.Lock()
         self.configs = CONFIGURATIONS['cameras']
+        self.sock.bind(('0.0.0.0', 5800))
+        self.sock.settimeout(1)
+        print("TCP socket bound to port 5800")
         self.is_connected = False
     
     def connect(self):
         self.lock.acquire()
-        self.sock.bind(('0.0.0.0', 5800))
-        print("TCP socket bound to port 5800")
-        print("Connecting to %s:5800..."%REMOTE_IP_ADDR,end='')
+        print("Connecting to %s:5800..." % REMOTE_IP_ADDR, end='')
         try:
             self.sock.connect((REMOTE_IP_ADDR, 5800))
-        except (TimeoutError,ConnectionRefusedError):
+        except (socket.timeout, ConnectionRefusedError):
             print("failed")
+            self.sock.close() # Reset the socket
+            self.sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(1)
+            self.sock.bind(('0.0.0.0', 5800))
             self.lock.release()
             return False
         else:
@@ -286,6 +298,23 @@ class Configuration(metaclass=SingletonMeta):
         self.is_connected = True
         self.lock.release()
         return True
+    
+    def reconnect(self):
+        if self.lock.acquire(False):
+            try:
+                self.sock.recv(1)
+            except (ConnectionResetError,socket.timeout):
+                self.sock.close()
+                self.sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.settimeout(1)
+                self.sock.bind(('0.0.0.0', 5800))
+                self.lock.release()
+                while not self.connect():
+                    print('Attempting to reconnect')
+            except:
+                print(traceback.format_exc(),file=sys.stderr)
+                self.lock.release()
+    
     
     def update_config(self, cam_num, resolution, quality):
         try:
@@ -306,7 +335,7 @@ class Configuration(metaclass=SingletonMeta):
             configs_file = open("configs.json", 'w+')
             configs_file.write(json.dumps({'cameras': self.configs}))
             configs_file.close()
-            print("TCP Connection closed",flush=True)
+            print("TCP Connection closed", flush=True)
             # Flush the stdout buffer because it's likely to be the last thing printed
             self.is_connected = False
             self.lock.release()
@@ -324,6 +353,7 @@ class StatusPlotItem(pg.PlotItem):
         self.__y = np.zeros((self.arr_size,), dtype=np.short)
         self.index = 0
         self.time_started = None
+        self.getViewBox().setAutoVisible(True,True)
         for axis in self.axes.values():
             axis['item'].enableAutoSIPrefix(False)
     
@@ -339,7 +369,7 @@ class StatusPlotItem(pg.PlotItem):
         self.__y[self.index] = v
         self.__x[self.index] = current_time
         self.index += 1
-        self.setLimits(xMin=current_time-30,xMax=current_time)
+        self.setLimits(xMin=current_time - 18, xMax=current_time+2)
         if self.index == self.arr_size:  # expends the array
             self.arr_size += 1200  # 20 FPS for 60 seconds
             new_x = np.full((self.arr_size,), np.inf, dtype=np.float)
@@ -351,10 +381,21 @@ class StatusPlotItem(pg.PlotItem):
             # self.index=0
     
     def update(self):
-        self.curve.setData(self.__x, self.__y)
-
+        if self.index>20:
+            self.curve.setData(self.__x[10:], self.__y[10:]) # The first few data points are very not accurate
+        else:
+            self.curve.setData(self.__x, self.__y)
 
 class Camera(QWidget):
+    modes = (
+        ('Manual', 0, 0),
+        ('Optimize for traffic (aggressive)',60,10),
+        ('Optimize for traffic (moderate)',120,25),
+        ('Optimize for latency (aggressive)',60,80),
+        ('Optimize for latency (moderate)',120,80),
+        ('Optimize for video quality',480,30)
+    )
+    
     def __init__(self, id, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.id = id
@@ -370,7 +411,7 @@ class Camera(QWidget):
         
         self.status_frame = QFrame()
         self.status_frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.status_frame.setMinimumSize(250, 280)
+        self.status_frame.setMinimumSize(250, 340)
         self.status = QScrollArea()
         self.status.setWidget(self.status_frame)
         self.initStatus()
@@ -378,43 +419,14 @@ class Camera(QWidget):
         self.network_graphs = pg.GraphicsLayoutWidget()
         self.traffic_graphs = pg.GraphicsLayoutWidget()
         self.frame_rate_graphs = pg.GraphicsLayoutWidget()
-        
-        self.traffic_plot = StatusPlotItem()
-        self.traffic_plot.setTitle("Traffic")
-        self.traffic_plot.setLabel("left", 'Data Transmitted', 'KB/s')
-        self.traffic_graphs.addItem(self.traffic_plot, row=0, col=0)
-        
-        self.network_plot = StatusPlotItem()
-        self.network_plot.setTitle("Network Time")
-        self.network_plot.setLabel("left", "Latency (ms)", )
-        self.network_graphs.addItem(self.network_plot, row=0, col=0)
-        
-        self.client_time_plot = StatusPlotItem()
-        self.client_time_plot.setTitle("Client Time")
-        self.client_time_plot.setLabel("left", "Latency (ms)", )
-        self.network_graphs.addItem(self.client_time_plot, row=0, col=1)
-        
-        self.total_time_plot = StatusPlotItem()
-        self.total_time_plot.setTitle("Total Latency")
-        self.total_time_plot.setLabel("left", "Latency (ms)", )
-        self.network_graphs.addItem(self.total_time_plot, row=0, col=2)
-        
-        self.frame_rate_plot = StatusPlotItem()
-        self.frame_rate_plot.setLabel('left', 'Frame Per Second')
-        self.frame_rate_plot.setTitle("Frame Rate")
-        self.frame_rate_graphs.addItem(self.frame_rate_plot, row=0, col=0)
-        
-        self.frame_drop_plot = StatusPlotItem()
-        self.frame_rate_plot.setLabel('left', 'Frame Per Second')
-        self.frame_drop_plot.setTitle('Frame Drop')
-        self.frame_rate_graphs.addItem(self.frame_drop_plot, row=0, col=1)
+        self.initGraphs()
         
         self.box.addWidget(self.tabs)
         
         self.tabs.addTab(self.camera_feed, 'Camera')
         self.tabs.addTab(self.status, 'Status')
         self.tabs.addTab(self.traffic_graphs, "Traffic")
-        self.tabs.addTab(self.network_graphs, "Network")
+        self.tabs.addTab(self.network_graphs, "Latency")
         self.tabs.addTab(self.frame_rate_graphs, "Video")
         
         self.setMinimumSize(1, 1)
@@ -470,36 +482,102 @@ class Camera(QWidget):
         self.status_layout.addWidget(QLabel("Traffic"), 6, 0)
         self.status_layout.addWidget(self.traffic, 6, 1)
         
+        self.mode_selection = QComboBox()
+        self.mode_selection.wheelEvent=self.status.wheelEvent # Monkey patch it so the selection doesn't change
+        self.mode_selection.setEnabled(False)
+        self.mode_selection.setSizePolicy(QSizePolicy.Minimum,QSizePolicy.Fixed)
+        for i,mode in enumerate(self.modes):
+            self.mode_selection.addItem(mode[0])
+            if self.image_resolution==mode[1] and self.image_quality==mode[2]:
+                self.mode_selection.setCurrentIndex(i)
+        
+        self.status_layout.addWidget(self.mode_selection, 7, 0, columnspan=2)
+        self.mode_selection.currentIndexChanged.connect(self.updateMode)
+        
         self.quality_slider = QSlider(Qt.Horizontal)
         self.quality_slider.setMinimum(1)
         self.quality_slider.setMaximum(80)
         self.quality_slider.setSingleStep(1)
         self.quality_slider.setValue(self.image_quality)
+        self.quality_slider.wheelEvent=self.status.wheelEvent
+        self.quality_slider.setEnabled(False)
         
         self.quality_label = QLabel(str(self.image_quality))
         self.quality_slider.valueChanged.connect(lambda n: self.quality_label.setText(str(n)))
         
         self.resolution_slider = QSlider(Qt.Horizontal, )
-        self.resolution_slider.setMinimum(120)
+        self.resolution_slider.setMinimum(60)
         self.resolution_slider.setMaximum(1080)
         self.resolution_slider.setSingleStep(120)
         self.resolution_slider.setValue(self.image_resolution)
+        self.resolution_slider.wheelEvent=self.status.wheelEvent
+        self.resolution_slider.setEnabled(False)
         
         self.resolution_label = QLabel(str(self.image_resolution))
         self.resolution_slider.valueChanged.connect(lambda n: self.resolution_label.setText(str(n)))
         
-        self.status_layout.addWidget(QLabel("Image Quality"), 7, 0, columnspan=2)
-        self.status_layout.addWidget(self.quality_slider, 8, 0)
-        self.status_layout.addWidget(self.quality_label, 8, 1)
+        self.status_layout.addWidget(QLabel("Image Quality"), 8, 0, columnspan=2)
+        self.status_layout.addWidget(self.quality_slider, 9, 0)
+        self.status_layout.addWidget(self.quality_label, 9, 1)
         
-        self.status_layout.addWidget(QLabel("Image Resolution"), 9, 0, columnspan=2)
-        self.status_layout.addWidget(self.resolution_slider, 10, 0)
-        self.status_layout.addWidget(self.resolution_label, 10, 1)
+        self.status_layout.addWidget(QLabel("Image Resolution"), 10, 0, columnspan=2)
+        self.status_layout.addWidget(self.resolution_slider, 11, 0)
+        self.status_layout.addWidget(self.resolution_label, 11, 1)
         
         self.apply_button = QPushButton("Apply")
-        self.status_layout.addWidget(self.apply_button, 11, 1)
-        self.apply_button.clicked.connect(
-                lambda e: Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value()))
+        self.apply_button.setEnabled(False)
+        self.status_layout.addWidget(self.apply_button, 12, 0)
+        
+        self.apply_button.clicked.connect(self.updateConfiguration)
+    
+    def updateMode(self, index):
+        mode_name,resolution,quality=self.modes[index]
+        if mode_name=='Manual':
+            self.apply_button.setEnabled(True)
+            self.resolution_slider.setEnabled(True)
+            self.quality_slider.setEnabled(True)
+        else:
+            self.apply_button.setEnabled(False)
+            self.resolution_slider.setEnabled(False)
+            self.quality_slider.setEnabled(False)
+            self.resolution_slider.setValue(resolution)
+            self.quality_slider.setValue(quality)
+            self.updateConfiguration()
+        
+    
+    def updateConfiguration(self):
+        Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value())
+    
+    def initGraphs(self):
+        self.traffic_plot = StatusPlotItem()
+        self.traffic_plot.setTitle("Traffic")
+        self.traffic_plot.setLabel("left", 'Data Transmitted', 'KB/s')
+        self.traffic_graphs.addItem(self.traffic_plot, row=0, col=0)
+        
+        self.network_plot = StatusPlotItem()
+        self.network_plot.setTitle("Network Time")
+        self.network_plot.setLabel("left", "Latency (ms)", )
+        self.network_graphs.addItem(self.network_plot, row=0, col=0)
+        
+        self.client_time_plot = StatusPlotItem()
+        self.client_time_plot.setTitle("Client Time")
+        self.client_time_plot.setLabel("left", "Latency (ms)", )
+        self.network_graphs.addItem(self.client_time_plot, row=0, col=1)
+        
+        self.total_time_plot = StatusPlotItem()
+        self.total_time_plot.setTitle("Total Latency")
+        self.total_time_plot.setLabel("left", "Latency (ms)", )
+        self.network_graphs.addItem(self.total_time_plot, row=0, col=2)
+        
+        self.frame_rate_plot = StatusPlotItem()
+        self.frame_rate_plot.setLabel('left', 'Frame Per Second')
+        self.frame_rate_plot.setTitle("Frame Rate")
+        self.frame_rate_graphs.addItem(self.frame_rate_plot, row=0, col=0)
+        
+        self.frame_drop_plot = StatusPlotItem()
+        self.frame_rate_plot.setLabel('left', 'Frame Per Second')
+        self.frame_drop_plot.setTitle('Frame Drop')
+        self.frame_rate_graphs.addItem(self.frame_drop_plot, row=0, col=1)
     
     def updateStatus(self, total, server, client):
         self.totalTime.setText('{: <4} ms'.format(str(total)))
@@ -510,7 +588,7 @@ class Camera(QWidget):
         self.clientTime.setText('{: <4} ms'.format(str(client)))
         self.client_time_plot.value = client
         
-        self.networkTime.setText('{: <4} ms'.format(str(total - server - client)))
+        self.networkTime.setText('{: <4} ms'.format(str( round(total - server - client,2) )))
         self.network_plot.value = total - server - client
         
         self.traffic.setText('{: <4} KB/s'.format(str(round(getattr(TrafficMonitor(), 'cam%d' % self.id) / 1024, 1))))
@@ -545,7 +623,7 @@ class CameraPanel(QWidget):
         self.box = QVBoxLayout()
         self.setLayout(self.box)
         
-        self.connectButton=QPushButton("Connect")
+        self.connectButton = QPushButton("Connect")
         self.connectButton.clicked.connect(self.connectRemote)
         self.box.addWidget(self.connectButton)
         
@@ -586,6 +664,8 @@ class CameraPanel(QWidget):
             self.connectButton.hide()
             for cam in self.cameras:
                 cam.startReceiving()
+                cam.mode_selection.setEnabled(True)
+                cam.updateMode(0)
 
 
 if __name__ == '__main__':
@@ -626,20 +706,15 @@ if __name__ == '__main__':
     
     cp = CameraPanel(2)
     
-    #cp.connectRemote()
+    # cp.connectRemote()
     cp.setWindowFlag(Qt.WindowStaysOnTopHint)
     cp.show()
     
     
     def close_TCP(signum, frame):
-        print("Signal %d received. Exiting..." %signum,flush=True)
+        print("Signal %d received. Exiting..." % signum, flush=True)
         app.quit()
         Configuration().close()
-
-
-        
-    
-    
     
     
     signal.signal(signal.SIGINT, close_TCP)
