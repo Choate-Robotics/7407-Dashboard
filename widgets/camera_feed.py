@@ -19,7 +19,7 @@ from io import BytesIO
 
 
 from PIL import Image, ImageFile
-from PySide2.QtCore import QObject, Qt, Signal, QTimer
+from PySide2.QtCore import QObject, Qt, Signal, QTimer, QThread
 from PySide2.QtGui import QImage, QPixmap
 from PySide2.QtWidgets import (
     QFrame,
@@ -39,14 +39,14 @@ from PySide2.QtWidgets import (
 )
 
 IMAGE_BUFFER_SIZE = 1024
-REMOTE_IP_ADDR = '10.9.5.5'#'10.5.5.100'  # '10.9.5.5'  # '10.74.7.12'
+REMOTE_IP_ADDR = '10.9.5.5' #'10.5.5.100'  # '10.9.5.5'  # '10.74.7.12'
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
+# pg.setConfigOption('background', 'w')
+# pg.setConfigOption('foreground', 'k')
 
 
 class Signals(QObject):
@@ -116,6 +116,7 @@ class TrafficMonitor(metaclass=SingletonMeta):
     @property
     def total(self):
         v = 0
+        
         for i in range(self._n_camera):
             v += getattr(self, 'cam%d' % i)
         return v
@@ -163,6 +164,7 @@ class FeedReceiver(threading.Thread):
         self.signals = Signals()
         self.width = 960
         self._terminate = False
+        self.initial_connection_succeeded=False
         app.aboutToQuit.connect(self.terminate)
     
     def run(self):
@@ -212,10 +214,15 @@ class FeedReceiver(threading.Thread):
                     else:
                         setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
                 except socket.timeout:
-                    Configuration().reconnect()
+                    if self.initial_connection_succeeded:
+                        Configuration().reconnect()
                 except:
                     print(traceback.format_exc(), file=sys.stderr)
                     setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
+                else:
+                    if not self.initial_connection_succeeded:
+                        self.initial_connection_succeeded=True
+                        print("UDP connection to %s:%d established"%(REMOTE_IP_ADDR,self.camera_id+5801))
             else:
                 print("Receiver thread for camera %d terminated" % self.camera_id)
     
@@ -280,8 +287,8 @@ class Configuration(metaclass=SingletonMeta):
         print("Connecting to %s:5800..." % REMOTE_IP_ADDR, end='')
         try:
             self.sock.connect((REMOTE_IP_ADDR, 5800))
-        except (socket.timeout, ConnectionRefusedError):
-            print("failed")
+        except (socket.timeout, ConnectionRefusedError, OSError) as e:
+            print("failed: %s" % e)
             self.sock.close() # Reset the socket
             self.sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.settimeout(1)
@@ -294,7 +301,7 @@ class Configuration(metaclass=SingletonMeta):
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
         else:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
-        self.sock.send(json.dumps(self.configs).encode())
+        self.sock.send(json.dumps(self.configs).encode()+b'|')
         self.is_connected = True
         self.lock.release()
         return True
@@ -305,12 +312,17 @@ class Configuration(metaclass=SingletonMeta):
                 self.sock.recv(1)
             except (ConnectionResetError,socket.timeout):
                 self.sock.close()
+                cp.reconnecting.show()
+                cp.total_traffic.hide()
                 self.sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.sock.settimeout(1)
                 self.sock.bind(('0.0.0.0', 5800))
                 self.lock.release()
                 while not self.connect():
-                    print('Attempting to reconnect')
+                    cp.reconnecting.setText(cp.reconnecting.text()+'.')
+                cp.reconnecting.setText("Disconnected. Trying to reconnect")
+                cp.reconnecting.hide()
+                cp.total_traffic.show()
             except:
                 print(traceback.format_exc(),file=sys.stderr)
                 self.lock.release()
@@ -320,7 +332,7 @@ class Configuration(metaclass=SingletonMeta):
         try:
             self.configs['cam%d' % cam_num] = {'resolution': resolution, 'quality': quality}
             self.lock.acquire()
-            self.sock.send(json.dumps(self.configs).encode())
+            self.sock.send(json.dumps(self.configs).encode()+b'|')
         finally:
             self.lock.release()
     
@@ -347,7 +359,7 @@ class StatusPlotItem(pg.PlotItem):
         self.arr_size = arr_size
         self.setClipToView(True)
         self.setDownsampling(mode='subsample')
-        self.setLabel('bottom', 'Time Since Connected')
+        self.setLabel('bottom', 'Time')
         self.curve = self.plot()
         self.__x = np.full((self.arr_size,), np.inf, dtype=np.float)
         self.__y = np.zeros((self.arr_size,), dtype=np.short)
@@ -543,11 +555,15 @@ class Camera(QWidget):
             self.resolution_slider.setValue(resolution)
             self.quality_slider.setValue(quality)
             self.updateConfiguration()
+            
         
     
     def updateConfiguration(self):
-        Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value())
-    
+        try:
+            Configuration().update_config(self.id, self.resolution_slider.value(), self.quality_slider.value())
+        except (ConnectionResetError,BrokenPipeError):
+            Configuration().reconnect()
+        
     def initGraphs(self):
         self.traffic_plot = StatusPlotItem()
         self.traffic_plot.setTitle("Traffic")
@@ -557,7 +573,7 @@ class Camera(QWidget):
         self.network_plot = StatusPlotItem()
         self.network_plot.setTitle("Network Time")
         self.network_plot.setLabel("left", "Latency (ms)", )
-        self.network_graphs.addItem(self.network_plot, row=0, col=0)
+        self.network_graphs.addItem(self.network_plot, row=0, col=2)
         
         self.client_time_plot = StatusPlotItem()
         self.client_time_plot.setTitle("Client Time")
@@ -567,7 +583,7 @@ class Camera(QWidget):
         self.total_time_plot = StatusPlotItem()
         self.total_time_plot.setTitle("Total Latency")
         self.total_time_plot.setLabel("left", "Latency (ms)", )
-        self.network_graphs.addItem(self.total_time_plot, row=0, col=2)
+        self.network_graphs.addItem(self.total_time_plot, row=0, col=0)
         
         self.frame_rate_plot = StatusPlotItem()
         self.frame_rate_plot.setLabel('left', 'Frame Per Second')
@@ -625,7 +641,17 @@ class CameraPanel(QWidget):
         
         self.connectButton = QPushButton("Connect")
         self.connectButton.clicked.connect(self.connectRemote)
+        self.reconnecting=QLabel("Disconnected. Trying to reconnect")
+        self.total_traffic=QLabel("0.000 KB/s")
         self.box.addWidget(self.connectButton)
+        self.box.addWidget(self.reconnecting)
+        self.box.addWidget(self.total_traffic)
+        self.total_traffic.hide()
+        self.reconnecting.hide()
+        
+        self.timer=QTimer()
+        self.timer.timeout.connect(self.updateTraffic)
+        self.timer.start(100)
         
         for i in range(n_camera):
             self.cameras.append(Camera(i))
@@ -662,11 +688,14 @@ class CameraPanel(QWidget):
         """
         if Configuration().connect():
             self.connectButton.hide()
+            self.total_traffic.show()
             for cam in self.cameras:
                 cam.startReceiving()
                 cam.mode_selection.setEnabled(True)
-                cam.updateMode(0)
-
+                cam.updateMode(cam.mode_selection.currentIndex())
+    
+    def updateTraffic(self):
+        self.total_traffic.setText('{:<4} KB/s'.format(round(TrafficMonitor().total/1024,2)))
 
 if __name__ == '__main__':
     from PySide2.QtWidgets import QApplication
@@ -704,7 +733,7 @@ if __name__ == '__main__':
     
     app.setStyle('Fusion')
     
-    cp = CameraPanel(2)
+    cp = CameraPanel(4)
     
     # cp.connectRemote()
     cp.setWindowFlag(Qt.WindowStaysOnTopHint)
