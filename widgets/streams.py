@@ -103,3 +103,5 @@ class StreamInput(QPlainTextEdit):
         self.overrideCursorValidation = False
 
 
+
+__all__=['StreamOutput','StreamInput','StreamError']

@@ -8,6 +8,7 @@ import struct
 import sys
 import threading
 import time
+import os
 import traceback
 import signal
 import numpy as np
@@ -45,8 +46,8 @@ DEBUG = True
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# pg.setConfigOption('background', 'w')
-# pg.setConfigOption('foreground', 'k')
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
 
 
 class Signals(QObject):
@@ -272,7 +273,7 @@ class CameraFeed(QWidget):
 
 
 class Configuration(metaclass=SingletonMeta):
-    def __init__(self, n_camera):
+    def __init__(self, n_camera, camera_panel:CameraPanel):
         self.n_camera = n_camera
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.lock = threading.Lock()
@@ -281,6 +282,7 @@ class Configuration(metaclass=SingletonMeta):
         self.sock.settimeout(1)
         print("TCP socket bound to port 5800")
         self.is_connected = False
+        self.camera_panel=camera_panel
     
     def connect(self):
         self.lock.acquire()
@@ -312,17 +314,18 @@ class Configuration(metaclass=SingletonMeta):
                 self.sock.recv(1)
             except (ConnectionResetError,socket.timeout):
                 self.sock.close()
-                cp.reconnecting.show()
-                cp.total_traffic.hide()
+                
+                self.camera_panel.reconnecting.show()
+                self.camera_panel.total_traffic.hide()
                 self.sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.sock.settimeout(1)
                 self.sock.bind(('0.0.0.0', 5800))
                 self.lock.release()
                 while not self.connect():
-                    cp.reconnecting.setText(cp.reconnecting.text()+'.')
-                cp.reconnecting.setText("Disconnected. Trying to reconnect")
-                cp.reconnecting.hide()
-                cp.total_traffic.show()
+                    self.camera_panel.reconnecting.setText(self.camera_panel.reconnecting.text()+'.')
+                self.camera_panel.reconnecting.setText("Disconnected. Trying to reconnect")
+                self.camera_panel.reconnecting.hide()
+                self.camera_panel.total_traffic.show()
             except:
                 print(traceback.format_exc(),file=sys.stderr)
                 self.lock.release()
@@ -354,7 +357,7 @@ class Configuration(metaclass=SingletonMeta):
 
 
 class StatusPlotItem(pg.PlotItem):
-    def __init__(self, *args, arr_size=200, **kwargs):
+    def __init__(self, *args, arr_size=9000, **kwargs):
         super().__init__(*args, **kwargs)
         self.arr_size = arr_size
         self.setClipToView(True)
@@ -383,7 +386,8 @@ class StatusPlotItem(pg.PlotItem):
         self.index += 1
         self.setLimits(xMin=current_time - 18, xMax=current_time+2)
         if self.index == self.arr_size:  # expends the array
-            self.arr_size += 1200  # 20 FPS for 60 seconds
+            print('%s: Array Resizing'%round(current_time,2))
+            self.arr_size += 3600  # 30 FPS for 120 seconds
             new_x = np.full((self.arr_size,), np.inf, dtype=np.float)
             new_x[:self.__x.shape[0]] = self.__x
             new_y = np.zeros((self.arr_size,), dtype=np.ushort)
@@ -633,6 +637,15 @@ class Camera(QWidget):
 
 
 class CameraPanel(QWidget):
+    # __obj=None
+    # def __new__(cls, *args, **kwargs):
+    #     if cls.__obj is None:
+    #         pass
+    #         cls.__obj=QWidget.__new__(cls,*args,**kwargs)
+    #         QWidget.__init__(cls.__obj)
+    #         cls.__obj.__init__(*args,**kwargs)
+    #     return cls.__obj
+    #
     def __init__(self, n_camera, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cameras = []
@@ -656,7 +669,7 @@ class CameraPanel(QWidget):
         for i in range(n_camera):
             self.cameras.append(Camera(i))
         
-        Configuration(n_camera)
+        Configuration(n_camera,self)
         TrafficMonitor(n_camera)
         FrameRateMonitor(n_camera)
         FrameDropMonitor(n_camera)
@@ -697,59 +710,60 @@ class CameraPanel(QWidget):
     def updateTraffic(self):
         self.total_traffic.setText('{:<4} KB/s'.format(round(TrafficMonitor().total/1024,2)))
 
-if __name__ == '__main__':
-    from PySide2.QtWidgets import QApplication
-    import os
-    
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    
-    try:
-        configs_file = open("configs.json", 'r')
-        CONFIGURATIONS = json.loads(configs_file.read())
-        configs_file.close()
-    except (FileNotFoundError, ValueError):
-        CONFIGURATIONS = {
-            'cameras': {
-                'cam0': {
-                    'resolution': 240,
-                    'quality'   : 25
-                },
-                'cam1': {
-                    'resolution': 240,
-                    'quality'   : 25
-                },
-                'cam2': {
-                    'resolution': 240,
-                    'quality'   : 25
-                },
-                'cam3': {
-                    'resolution': 240,
-                    'quality'   : 25
-                }
+
+
+
+def close_TCP(signum, frame):
+    print("Signal %d received. Disconnecting..." % signum, flush=True)
+    Configuration().close()
+
+
+signal.signal(signal.SIGINT, close_TCP)
+signal.signal(signal.SIGTERM, close_TCP)
+if os.name != 'nt':
+    signal.signal(signal.SIGQUIT, close_TCP)
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    configs_file = open("configs.json", 'r')
+    CONFIGURATIONS = json.loads(configs_file.read())
+    configs_file.close()
+except (FileNotFoundError, ValueError):
+    CONFIGURATIONS = {
+        'cameras': {
+            'cam0': {
+                'resolution': 240,
+                'quality'   : 25
+            },
+            'cam1': {
+                'resolution': 240,
+                'quality'   : 25
+            },
+            'cam2': {
+                'resolution': 240,
+                'quality'   : 25
+            },
+            'cam3': {
+                'resolution': 240,
+                'quality'   : 25
             }
         }
+    }
+
+__all__=['CameraPanel']
+
+if __name__ == '__main__':
+    from PySide2.QtWidgets import QApplication
     
     app = QApplication([])
     
     app.setStyle('Fusion')
     
-    cp = CameraPanel(4)
-    
     # cp.connectRemote()
-    cp.setWindowFlag(Qt.WindowStaysOnTopHint)
-    cp.show()
-    
-    
-    def close_TCP(signum, frame):
-        print("Signal %d received. Exiting..." % signum, flush=True)
-        app.quit()
-        Configuration().close()
-    
-    
-    signal.signal(signal.SIGINT, close_TCP)
-    signal.signal(signal.SIGTERM, close_TCP)
-    if os.name != 'nt':
-        signal.signal(signal.SIGQUIT, close_TCP)
+    camera_panel = CameraPanel(3)
+    camera_panel.setWindowFlag(Qt.WindowStaysOnTopHint)
+    camera_panel.show()
     
     try:
         app.exec_()
