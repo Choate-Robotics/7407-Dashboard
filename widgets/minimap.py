@@ -53,3 +53,4 @@ class Minimap(QWidget):
         # TODO: draw axis
         # TODO: implement zoom slide bar
 
+__all__=['Minimap']

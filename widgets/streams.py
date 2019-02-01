@@ -25,6 +25,9 @@ class StreamOutput(QTextEdit):
     
     def flush(self):
         pass
+    
+    def closeStream(self):
+        'write everything back'
 
 class StreamError(StreamOutput):
     def write(self, text):
@@ -100,3 +103,5 @@ class StreamInput(QPlainTextEdit):
         self.overrideCursorValidation = False
 
 
+
+__all__=['StreamOutput','StreamInput','StreamError']
