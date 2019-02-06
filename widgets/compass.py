@@ -3,25 +3,6 @@ from PySide2.QtCore import *
 from PySide2.QtGui import *
 from PySide2.QtWidgets import *
 
-from widgets import StreamError, StreamInput, StreamOutput
-
-class App(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.title = 'Wired Boars · 7407'
-        '''self.left = 0
-        self.top = 0
-        self.width = 300
-        self.height = 200'''
-        self.showFullScreen()
-        self.setWindowTitle(self.title)
-        #self.setGeometry(self.left, self.top, self.width, self.height)
-
-        self.table_widget = MyTableWidget(self)
-        self.setCentralWidget(self.table_widget)
-
-        self.show()
-
 class CompassWidget(QWidget):
 
     angleChanged = Signal(float)
@@ -32,8 +13,8 @@ class CompassWidget(QWidget):
 
         self._angle = 0.0
         self._margins = 10
-        self._pointText = {0: "N", 45: "SW", 90: "E", 135: "SE", 180: "S",
-                           225: "NE", 270: "W", 315: "NW"}
+        self._pointText = {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S",
+                           225: "SW", 270: "W", 315: "NW"}
 
     def paintEvent(self, event):
 
@@ -63,7 +44,8 @@ class CompassWidget(QWidget):
         painter.setPen(self.palette().color(QPalette.Shadow))
 
         i = 0
-        while i<360:
+        while i < 360:
+
             if i % 45 == 0:
                 painter.drawLine(0, -40, 0, -50)
                 painter.drawText(-metrics.width(self._pointText[i])/2.0, -52,
@@ -118,48 +100,22 @@ class CompassWidget(QWidget):
 
     angle = property(float, angle, setAngle)
 
-class MyTableWidget(QWidget):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
+'''
+if __name__ == "__main__":
 
-        # Initialize tab screen
-        self.tabs = QTabWidget()
-        self.tab1 = QWidget()
-        self.tab2 = QWidget()
-        self.tabs.resize(300,200)
-
-        # Create first tab
-        self.tab1.layout = QVBoxLayout(self)
-        self.pushButton1 = QPushButton("Tab 1")
-        self.tab1.layout.addWidget(self.pushButton1)
-        self.tab1.setLayout(self.tab1.layout)
-
-        # Create second tab
-        self.tab2.layout = QVBoxLayout(self)
-        self.gyroCompass = CompassWidget()
-        self.tab2.layout.addSpacing(600)
-        self.spinBox = QSpinBox()
-        self.spinBox.setRange(0, 10000)
-        self.spinBox.valueChanged.connect(self.gyroCompass.setAngle)
-        self.tab2.layout.addWidget(self.gyroCompass)
-        self.tab2.layout.addWidget(self.spinBox)
-        self.tab2.setLayout(self.tab2.layout)
-
-        # Add tabs
-        self.tabs.addTab(self.tab1,"Camera View")
-        self.tabs.addTab(self.tab2,"Detail View")
-
-        # Add tabs to widget
-        self.layout.addWidget(self.tabs)
-        self.setLayout(self.layout)
-
-def on_click(self):
-    print("\n")
-    for currentQTableWidgetItem in self.tableWidget.selectedItems():
-        print(currentQTableWidgetItem.row(), currentQTableWidgetItem.column(), currentQTableWidgetItem.text())
-
-if __name__ == '__main__':
     app = QApplication(sys.argv)
-    ex = App()
+
+    window = QWidget()
+    compass = CompassWidget()
+    spinBox = QSpinBox()
+    spinBox.setRange(0, 359)
+    spinBox.valueChanged.connect(compass.setAngle)
+
+    layout = QVBoxLayout()
+    layout.addWidget(compass)
+    layout.addWidget(spinBox)
+    window.setLayout(layout)
+
+    window.show()
     sys.exit(app.exec_())
+'''

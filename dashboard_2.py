@@ -1,6 +1,7 @@
-from PySide2.QtCore import Qt
-from PySide2.QtWidgets import (QDesktopWidget, QFrame, QGridLayout, QLabel, QSizePolicy, QSlider, QSplitter, QVBoxLayout, QWidget)
-
+import sys
+from PySide2.QtCore import *
+from PySide2.QtGui import *
+from PySide2.QtWidgets import *
 from widgets import StreamError, StreamInput, StreamOutput
 
 class MyTableWidget(QWidget):
