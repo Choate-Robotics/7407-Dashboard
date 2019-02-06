@@ -25,6 +25,7 @@ from PySide2.QtGui import QImage, QPixmap
 from PySide2.QtWidgets import (
     QFrame,
     QGridLayout,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -40,7 +41,7 @@ from PySide2.QtWidgets import (
 )
 
 IMAGE_BUFFER_SIZE = 1024
-REMOTE_IP_ADDR = '10.9.5.5' #'10.5.5.100'  # '10.9.5.5'  # '10.74.7.12'
+REMOTE_IP_ADDR = '10.74.7.4' #'10.5.5.100'  # '10.9.5.5'  # '10.74.7.12'
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
 
@@ -216,7 +217,10 @@ class FeedReceiver(threading.Thread):
                         setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
                 except socket.timeout:
                     if self.initial_connection_succeeded:
-                        Configuration().reconnect()
+                        if Configuration().lock.acquire(False):
+                            Configuration().lock.release() # Another thread issued reconnection already
+                        else:
+                            Configuration().reconnect()
                 except:
                     print(traceback.format_exc(), file=sys.stderr)
                     setattr(FrameDropMonitor(), 'cam%d' % self.camera_id, 1)
@@ -290,6 +294,10 @@ class Configuration(metaclass=SingletonMeta):
         try:
             self.sock.connect((REMOTE_IP_ADDR, 5800))
         except (socket.timeout, ConnectionRefusedError, OSError) as e:
+            if e.errno==56: # all three exception types have errno attribute
+                # connection already established
+                print('connected')
+                return True
             print("failed: %s" % e)
             self.sock.close() # Reset the socket
             self.sock=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -323,6 +331,7 @@ class Configuration(metaclass=SingletonMeta):
                 self.lock.release()
                 while not self.connect():
                     self.camera_panel.reconnecting.setText(self.camera_panel.reconnecting.text()+'.')
+                    time.sleep(0.1)
                 self.camera_panel.reconnecting.setText("Disconnected. Trying to reconnect")
                 self.camera_panel.reconnecting.hide()
                 self.camera_panel.total_traffic.show()
@@ -655,12 +664,28 @@ class CameraPanel(QWidget):
         self.connectButton = QPushButton("Connect")
         self.connectButton.clicked.connect(self.connectRemote)
         self.reconnecting=QLabel("Disconnected. Trying to reconnect")
+        self.reconnecting.setWordWrap(True)
         self.total_traffic=QLabel("0.000 KB/s")
-        self.box.addWidget(self.connectButton)
-        self.box.addWidget(self.reconnecting)
-        self.box.addWidget(self.total_traffic)
+        self.restart_remote=QPushButton("Restart Remote")
+        self.restart_remote.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Expanding)
+        self.restart_remote.clicked.connect(self.restartRemote)
+        
+        self.top_frame=QFrame()
+        self.top_frame.setSizePolicy(QSizePolicy.Minimum,QSizePolicy.Maximum)
+        self.top_grid=QGridLayout()
+        self.top_grid.setContentsMargins(0,0,0,0)
+        self.top_frame.setLayout(self.top_grid)
+        
+        self.top_grid.addWidget(self.connectButton,0,0)
+        self.top_grid.addWidget(self.reconnecting,0,0)
+        self.top_grid.addWidget(self.total_traffic,0,0)
+        self.top_grid.addWidget(self.restart_remote,0,1)
+        
         self.total_traffic.hide()
         self.reconnecting.hide()
+        
+        self.box.addWidget(self.top_frame)
+
         
         self.timer=QTimer()
         self.timer.timeout.connect(self.updateTraffic)
@@ -706,6 +731,13 @@ class CameraPanel(QWidget):
                 cam.startReceiving()
                 cam.mode_selection.setEnabled(True)
                 cam.updateMode(cam.mode_selection.currentIndex())
+    
+    def restartRemote(self):
+        os.system(f'ssh root@{REMOTE_IP_ADDR} systemctl restart vision-server.service')
+        if self.connectButton.isVisible():
+            self.connectRemote()
+        else:
+            Configuration().reconnect()
     
     def updateTraffic(self):
         self.total_traffic.setText('{:<4} KB/s'.format(round(TrafficMonitor().total/1024,2)))
