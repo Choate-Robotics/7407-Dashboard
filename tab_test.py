@@ -17,7 +17,7 @@ class App(QMainWindow):
         self.setWindowTitle(self.title)
         #self.setGeometry(self.left, self.top, self.width, self.height)
 
-        #self.table_widget = MyTableWidget(self)
+        self.table_widget = MyTableWidget(self)
         self.setCentralWidget(self.table_widget)
 
         self.show()
