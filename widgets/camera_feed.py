@@ -159,7 +159,7 @@ class FrameDropMonitor(metaclass=SingletonMeta):
 
 
 class FeedReceiver(threading.Thread):
-    def __init__(self, camera_feed: CameraFeed, camera_id: int):
+    def __init__(self, camera_feed: CameraFeed, camera_id: int, app:QApplication):
         super().__init__()
         self.camera_id = camera_id
         self.camera_feed_widget = camera_feed
@@ -244,9 +244,10 @@ class Indicator(QWidget):
 
 
 class CameraFeed(QWidget):
-    def __init__(self, id, *args, **kwargs):
+    def __init__(self, id,app:QApplication, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.id = id
+        self.app=app
         self.box = QHBoxLayout()
         self.setLayout(self.box)
         self.video_frame = QLabel()
@@ -260,7 +261,7 @@ class CameraFeed(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     
     def startReceiving(self):
-        self.feed_receiver = FeedReceiver(self, self.id)
+        self.feed_receiver = FeedReceiver(self, self.id,self.app)
         self.setVideoFramePlaceHolder()
         self.feed_receiver.signals.imageReady.connect(self.updateImage)
         self.feed_receiver.start()
@@ -421,7 +422,7 @@ class Camera(QWidget):
         ('Optimize for video quality',480,30)
     )
     
-    def __init__(self, id, *args, **kwargs):
+    def __init__(self, id, app:QApplication, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.id = id
         self.image_quality = CONFIGURATIONS['cameras']['cam%d' % id]['quality']
@@ -432,7 +433,7 @@ class Camera(QWidget):
         
         self.tabs = QTabWidget()
         
-        self.camera_feed = CameraFeed(self.id)
+        self.camera_feed = CameraFeed(self.id,app)
         
         self.status_frame = QFrame()
         self.status_frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -655,7 +656,7 @@ class CameraPanel(QWidget):
     #         cls.__obj.__init__(*args,**kwargs)
     #     return cls.__obj
     #
-    def __init__(self, n_camera, *args, **kwargs):
+    def __init__(self, n_camera, app:QApplication, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cameras = []
         self.box = QVBoxLayout()
@@ -692,7 +693,7 @@ class CameraPanel(QWidget):
         self.timer.start(100)
         
         for i in range(n_camera):
-            self.cameras.append(Camera(i))
+            self.cameras.append(Camera(i,app))
         
         Configuration(n_camera,self)
         TrafficMonitor(n_camera)
@@ -793,7 +794,7 @@ if __name__ == '__main__':
     app.setStyle('Fusion')
     
     # cp.connectRemote()
-    camera_panel = CameraPanel(3)
+    camera_panel = CameraPanel(3,app)
     camera_panel.setWindowFlag(Qt.WindowStaysOnTopHint)
     camera_panel.show()
     
