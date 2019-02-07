@@ -3,7 +3,7 @@ from PySide2.QtCore import *
 from PySide2.QtGui import *
 from PySide2.QtWidgets import *
 
-from widgets import StreamError, StreamInput, StreamOutput
+from widgets import StreamError, StreamInput, StreamOutput, CameraPanel
 
 class App(QMainWindow):
     def __init__(self):
@@ -131,8 +131,8 @@ class MyTableWidget(QWidget):
 
         # Create first tab
         self.tab1.layout = QVBoxLayout(self)
-        self.pushButton1 = QPushButton("Tab 1")
-        self.tab1.layout.addWidget(self.pushButton1)
+        self.cameraFeed = CameraPanel(1)
+        self.tab1.layout.addWidget(self.cameraFeed)
         self.tab1.setLayout(self.tab1.layout)
 
         # Create second tab
