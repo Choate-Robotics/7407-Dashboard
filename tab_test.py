@@ -32,8 +32,8 @@ class CompassWidget(QWidget):
 
         self._angle = 0.0
         self._margins = 10
-        self._pointText = {0: "N", 45: "SW", 90: "E", 135: "SE", 180: "S",
-                           225: "NE", 270: "W", 315: "NW"}
+        self._pointText = {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S",
+                           225: "SW", 270: "W", 315: "NW"}
 
     def paintEvent(self, event):
 
@@ -63,7 +63,8 @@ class CompassWidget(QWidget):
         painter.setPen(self.palette().color(QPalette.Shadow))
 
         i = 0
-        while i<360:
+        while i < 360:
+
             if i % 45 == 0:
                 painter.drawLine(0, -40, 0, -50)
                 painter.drawText(-metrics.width(self._pointText[i])/2.0, -52,
@@ -130,20 +131,20 @@ class MyTableWidget(QWidget):
         self.tabs.resize(300,200)
 
         # Create first tab
-        self.tab1.layout = QVBoxLayout(self)
+        self.tab1.layout = QGridLayout(self)
         self.cameraFeed = CameraPanel(1)
         self.tab1.layout.addWidget(self.cameraFeed)
         self.tab1.setLayout(self.tab1.layout)
 
         # Create second tab
-        self.tab2.layout = QVBoxLayout(self)
+        self.tab2.layout = QGridLayout(self)
         self.gyroCompass = CompassWidget()
-        self.tab2.layout.addSpacing(600)
         self.spinBox = QSpinBox()
         self.spinBox.setRange(0, 10000)
         self.spinBox.valueChanged.connect(self.gyroCompass.setAngle)
         self.tab2.layout.addWidget(self.gyroCompass)
         self.tab2.layout.addWidget(self.spinBox)
+        self.gyroCompass.setAutoFillBackground(True)
         self.tab2.setLayout(self.tab2.layout)
 
         # Add tabs
