@@ -41,7 +41,8 @@ from PySide2.QtWidgets import (
 )
 
 IMAGE_BUFFER_SIZE = 1024
-REMOTE_IP_ADDR = '10.74.7.4' #'10.5.5.100'  # '10.9.5.5'  # '10.74.7.12'
+REMOTE_IP_ADDR_SPACE='10.74.7'
+REMOTE_IP_ADDR = '10.74.7.4'
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
 
@@ -340,7 +341,6 @@ class Configuration(metaclass=SingletonMeta):
                 print(traceback.format_exc(),file=sys.stderr)
                 self.lock.release()
     
-    
     def update_config(self, cam_num, resolution, quality):
         try:
             self.configs['cam%d' % cam_num] = {'resolution': resolution, 'quality': quality}
@@ -365,6 +365,37 @@ class Configuration(metaclass=SingletonMeta):
             self.is_connected = False
             self.lock.release()
 
+    def scan(self):
+        global REMOTE_IP_ADDR
+        if not self.is_connected:
+            if self.lock.acquire(False):
+                try:
+                    for ip in range(256):
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        if os.name == 'nt':  # Reset TCP connections instead of waiting for ACK from peer
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
+                        else:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                        sock.settimeout(0.5)
+                        sock.bind(('0.0.0.0', 5800))
+                        try:
+                            print(f'\rScanning {REMOTE_IP_ADDR_SPACE}.{ip}', end='')
+                            sock.connect((f'{REMOTE_IP_ADDR_SPACE}.{ip}', 5800))
+                        except KeyboardInterrupt:
+                            raise
+                        except (IOError, OSError):
+                            pass
+                        else:
+                            print(f'\rAddress found {REMOTE_IP_ADDR_SPACE}.{ip}')
+                            REMOTE_IP_ADDR = f'{REMOTE_IP_ADDR_SPACE}.{ip}'
+                            break
+                        finally:
+                            sock.close()
+                    else:
+                        print('\nScan finished. Not found.')
+                finally:
+                    self.lock.release()
+                
 
 class StatusPlotItem(pg.PlotItem):
     def __init__(self, *args, arr_size=9000, **kwargs):
