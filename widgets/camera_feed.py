@@ -41,8 +41,10 @@ from PySide2.QtWidgets import (
 )
 
 IMAGE_BUFFER_SIZE = 1024
+
 REMOTE_IP_ADDR_SPACE='10.74.7'
 REMOTE_IP_ADDR = '10.74.7.4'
+
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
 
@@ -295,6 +297,9 @@ class Configuration(metaclass=SingletonMeta):
         print("Connecting to %s:5800..." % REMOTE_IP_ADDR, end='')
         try:
             self.sock.connect((REMOTE_IP_ADDR, 5800))
+            self.sock.recv(4)
+            t1 = time.time()
+            self.sock.send(struct.pack('ff', t1, time.time()))
         except (socket.timeout, ConnectionRefusedError, OSError) as e:
             if e.errno==56: # all three exception types have errno attribute
                 # connection already established
@@ -825,7 +830,7 @@ if __name__ == '__main__':
     app.setStyle('Fusion')
     
     # cp.connectRemote()
-    camera_panel = CameraPanel(3,app)
+    camera_panel = CameraPanel(2)
     camera_panel.setWindowFlag(Qt.WindowStaysOnTopHint)
     camera_panel.show()
     
