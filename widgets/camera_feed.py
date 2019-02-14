@@ -376,7 +376,7 @@ class Configuration(metaclass=SingletonMeta):
             if self.lock.acquire(False):
                 try:
                     self.sock.close()
-                    for ip in range(256):
+                    for ip in range(2,64):
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         if os.name == 'nt':  # Reset TCP connections instead of waiting for ACK from peer
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
@@ -747,7 +747,7 @@ class CameraPanel(QWidget):
             self.cameras.append(Camera(i,app))
     
         
-        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self.cameras[0])
         if n_camera == 2:
             main_splitter.addWidget(self.cameras[1])
