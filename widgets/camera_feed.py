@@ -43,7 +43,7 @@ from PySide2.QtWidgets import (
 IMAGE_BUFFER_SIZE = 1024
 
 REMOTE_IP_ADDR_SPACE='10.74.7'
-REMOTE_IP_ADDR = '10.74.7.4'
+REMOTE_IP_ADDR = '10.9.5.90'
 
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
@@ -299,7 +299,7 @@ class Configuration(metaclass=SingletonMeta):
             self.sock.connect((REMOTE_IP_ADDR, 5800))
             self.sock.recv(4)
             t1 = time.time()
-            self.sock.send(struct.pack('ff', t1, time.time()))
+            self.sock.send(struct.pack('dd', t1, time.time()))
         except (socket.timeout, ConnectionRefusedError, OSError) as e:
             if e.errno==56: # all three exception types have errno attribute
                 # connection already established
@@ -375,7 +375,8 @@ class Configuration(metaclass=SingletonMeta):
         if not self.is_connected:
             if self.lock.acquire(False):
                 try:
-                    for ip in range(256):
+                    self.sock.close()
+                    for ip in range(2,64):
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         if os.name == 'nt':  # Reset TCP connections instead of waiting for ACK from peer
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
@@ -399,6 +400,9 @@ class Configuration(metaclass=SingletonMeta):
                     else:
                         print('\nScan finished. Not found.')
                 finally:
+                    self.sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+                    self.sock.bind(('0.0.0.0', 5800))
+                    self.sock.settimeout(1)
                     self.lock.release()
                 
 
@@ -697,7 +701,12 @@ class CameraPanel(QWidget):
         self.cameras = []
         self.box = QVBoxLayout()
         self.setLayout(self.box)
-
+        
+        Configuration(n_camera,self)
+        TrafficMonitor(n_camera)
+        FrameRateMonitor(n_camera)
+        FrameDropMonitor(n_camera)
+        
         self.connectButton = QPushButton("Connect")
         self.connectButton.clicked.connect(self.connectRemote)
         self.reconnecting=QLabel("Disconnected. Trying to reconnect")
@@ -706,18 +715,24 @@ class CameraPanel(QWidget):
         self.restart_remote=QPushButton("Restart Remote")
         self.restart_remote.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Expanding)
         self.restart_remote.clicked.connect(self.restartRemote)
-
+        self.scan=QPushButton("Scan")
+        self.scan.setSizePolicy(QSizePolicy.Maximum,QSizePolicy.Expanding)
+        self.scan.clicked.connect(Configuration().scan)
+        
+        
         self.top_frame=QFrame()
         self.top_frame.setSizePolicy(QSizePolicy.Minimum,QSizePolicy.Maximum)
         self.top_grid=QGridLayout()
         self.top_grid.setContentsMargins(0,0,0,0)
         self.top_frame.setLayout(self.top_grid)
-
-        self.top_grid.addWidget(self.connectButton,0,0)
-        self.top_grid.addWidget(self.reconnecting,0,0)
-        self.top_grid.addWidget(self.total_traffic,0,0)
-        self.top_grid.addWidget(self.restart_remote,0,1)
-
+        
+        self.top_grid.addWidget(self.connectButton,0,1)
+        self.top_grid.addWidget(self.reconnecting,0,1)
+        self.top_grid.addWidget(self.total_traffic,0,1)
+        self.top_grid.addWidget(self.restart_remote,0,2)
+        self.top_grid.addWidget(self.scan,0,0)
+        
+        
         self.total_traffic.hide()
         self.reconnecting.hide()
 
@@ -730,13 +745,9 @@ class CameraPanel(QWidget):
 
         for i in range(n_camera):
             self.cameras.append(Camera(i,app))
-
-        Configuration(n_camera,self)
-        TrafficMonitor(n_camera)
-        FrameRateMonitor(n_camera)
-        FrameDropMonitor(n_camera)
-
-        main_splitter = QSplitter(Qt.Vertical)
+    
+        
+        main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(self.cameras[0])
         if n_camera == 2:
             main_splitter.addWidget(self.cameras[1])
@@ -830,7 +841,7 @@ if __name__ == '__main__':
     app.setStyle('Fusion')
 
     # cp.connectRemote()
-    camera_panel = CameraPanel(2)
+    camera_panel = CameraPanel(2,app)
     camera_panel.setWindowFlag(Qt.WindowStaysOnTopHint)
     camera_panel.show()
 
