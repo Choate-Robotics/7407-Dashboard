@@ -43,7 +43,7 @@ from PySide2.QtWidgets import (
 IMAGE_BUFFER_SIZE = 1024
 
 REMOTE_IP_ADDR_SPACE='10.74.7'
-REMOTE_IP_ADDR = '10.9.5.90'
+REMOTE_IP_ADDR = '10.74.7.14'
 
 FRAME_START_IDENTIFIER = b'\n_\x92\xc3\x9c>\xbe\xfe\xc1\x98'
 DEBUG = True
@@ -291,6 +291,7 @@ class Configuration(metaclass=SingletonMeta):
         print("TCP socket bound to port 5800")
         self.is_connected = False
         self.camera_panel=camera_panel
+        self.continue_scan=False
     
     def connect(self):
         self.lock.acquire()
@@ -376,7 +377,7 @@ class Configuration(metaclass=SingletonMeta):
             if self.lock.acquire(False):
                 try:
                     self.sock.close()
-                    for ip in range(2,64):
+                    for ip in range(int(REMOTE_IP_ADDR.split('.')[-1])+1 if self.continue_scan else 2,64):
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         if os.name == 'nt':  # Reset TCP connections instead of waiting for ACK from peer
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('hh', 1, 0))
@@ -394,6 +395,7 @@ class Configuration(metaclass=SingletonMeta):
                         else:
                             print(f'\rAddress found {REMOTE_IP_ADDR_SPACE}.{ip}')
                             REMOTE_IP_ADDR = f'{REMOTE_IP_ADDR_SPACE}.{ip}'
+                            self.continue_scan=True
                             break
                         finally:
                             sock.close()
@@ -687,16 +689,11 @@ class Camera(QWidget):
 
 
 class CameraPanel(QWidget):
-    # __obj=None
-    # def __new__(cls, *args, **kwargs):
-    #     if cls.__obj is None:
-    #         pass
-    #         cls.__obj=QWidget.__new__(cls,*args,**kwargs)
-    #         QWidget.__init__(cls.__obj)
-    #         cls.__obj.__init__(*args,**kwargs)
-    #     return cls.__obj
-    #
+    __obj=None
     def __init__(self, n_camera, app:QApplication, *args, **kwargs):
+        if CameraPanel.__obj is not None:
+            raise type('InstanceExists',(Exception,),{})('A CameraPanel instance has already been constructed.')
+        CameraPanel.__obj=self
         super().__init__(*args, **kwargs)
         self.cameras = []
         self.box = QVBoxLayout()
