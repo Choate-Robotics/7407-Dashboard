@@ -131,19 +131,22 @@ class MyTableWidget(QWidget):
         self.tabs.resize(300,200)
 
         # Create first tab
-        self.tab1.layout = QGridLayout(self)
-        self.cameraFeed = CameraPanel(1)
+        self.tab1.layout = QVBoxLayout(self)
+        self.cameraFeed = CameraPanel(1, app)
         self.tab1.layout.addWidget(self.cameraFeed)
         self.tab1.setLayout(self.tab1.layout)
 
         # Create second tab
         self.tab2.layout = QGridLayout(self)
         self.gyroCompass = CompassWidget()
+        self.gyroCompass.resize(200, 100)
+        self.cameraPanels = CameraPanel(2, app)
         self.spinBox = QSpinBox()
         self.spinBox.setRange(0, 10000)
         self.spinBox.valueChanged.connect(self.gyroCompass.setAngle)
-        self.tab2.layout.addWidget(self.gyroCompass)
-        self.tab2.layout.addWidget(self.spinBox)
+        self.tab2.layout.addWidget(self.cameraPanels, 0, 0)
+        self.tab2.layout.addWidget(self.gyroCompass, 0, 2)
+        self.tab2.layout.addWidget(self.spinBox, 4, 2)
         self.gyroCompass.setAutoFillBackground(True)
         self.tab2.setLayout(self.tab2.layout)
 
