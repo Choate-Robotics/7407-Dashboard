@@ -1,5 +1,6 @@
 import sys
 import traceback
+import datetime
 
 from PySide2.QtCore import Qt
 from PySide2.QtGui import (QColor, QFont, QPainter, QTextCursor)
@@ -16,8 +17,8 @@ class StreamOutput(QTextEdit):
     
     def write(self, text, color=None):
         self.moveCursor(QTextCursor.End)
-        if self.textCursor().columnNumber() == 0:
-            self.insertHtml(f"<font color='grey'>{datetime.datetime.now().strftime('%H:%M:%S.%f')}</font> ")
+        # if self.textCursor().columnNumber() == 0:
+        #     self.insertHtml(f"<font color='grey'>{datetime.datetime.now().strftime('%H:%M:%S.%f')}</font> ")
         text = text.replace('\n', '<br>').replace(' ', '&nbsp;')
         if color:
             text = "<font color='%s'>" % color + text + '</font>'
@@ -37,8 +38,10 @@ class StreamError(StreamOutput):
 
 
 class StreamInput(QPlainTextEdit):
-    def __init__(self):
+    def __init__(self,namespace:dict=None,plain_text_output=False):
         super().__init__()
+        if namespace:
+            globals().update(namespace)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.insertPlainText('>>> ')
         self.document().clearUndoRedoStacks()
@@ -46,6 +49,7 @@ class StreamInput(QPlainTextEdit):
         self.lastCursorPosition = 4
         self.historyNumber = 0
         self.overrideCursorValidation = False
+        self.plainTextOutput=plain_text_output
     
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
@@ -55,12 +59,18 @@ class StreamInput(QPlainTextEdit):
                 self.insertPlainText('\n>>> ')
                 self.historyNumber = 0
                 return
-            print(f"<b>(exec)</b> {last_line}")
+            if self.plainTextOutput:
+                print(f'(exec) {last_line}')
+            else:
+                print(f"<b>(exec)</b> {last_line}")
             try:
                 exec(last_line, globals())
             except BaseException as e:
-                tb = traceback.format_exc().replace(' ', '&nbsp;')
-                sys.stdout.write(f"<br>{tb}", 'red')
+                if self.plainTextOutput:
+                    sys.stdout.write(traceback.format_exc())
+                else:
+                    tb = traceback.format_exc().replace(' ', '&nbsp;')
+                    sys.stdout.write(f"<br>{tb}", 'red')
             self.moveCursor(QTextCursor.End)
             self.insertPlainText('\n>>> ')
             self.historyNumber = 0

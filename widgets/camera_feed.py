@@ -279,6 +279,11 @@ class CameraFeed(QWidget):
         img.fill(2)
         self.updateImage(img)
 
+    def saveImage(self,name=None):
+        fn='img/'+(name or datetime.datetime.now().isoformat())+'.jpg'
+        print(fn)
+        self.video_frame.pixmap().save(fn,'JPEG',100)
+        
 
 class Configuration(metaclass=SingletonMeta):
     def __init__(self, n_camera, camera_panel:CameraPanel):
@@ -298,7 +303,7 @@ class Configuration(metaclass=SingletonMeta):
         print("Connecting to %s:5800..." % REMOTE_IP_ADDR, end='')
         try:
             self.sock.connect((REMOTE_IP_ADDR, 5800))
-            self.sock.recv(4)
+            #self.sock.recv(4)
             t1 = time.time()
             self.sock.send(struct.pack('dd', t1, time.time()))
         except (socket.timeout, ConnectionRefusedError, OSError) as e:
@@ -800,7 +805,7 @@ signal.signal(signal.SIGTERM, close_TCP)
 if os.name != 'nt':
     signal.signal(signal.SIGQUIT, close_TCP)
 
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
 
 try:
     configs_file = open("configs.json", 'r')
@@ -838,10 +843,28 @@ if __name__ == '__main__':
     app.setStyle('Fusion')
 
     # cp.connectRemote()
+    from widgets.streams import StreamInput,StreamOutput,StreamError
+    import datetime
+    w=QWidget()
+    w.setWindowFlag(Qt.WindowStaysOnTopHint)
+    vb=QVBoxLayout()
+    w.setLayout(vb)
     camera_panel = CameraPanel(2,app)
-    camera_panel.setWindowFlag(Qt.WindowStaysOnTopHint)
-    camera_panel.show()
-
+    vb.addWidget(camera_panel)
+    in_=StreamInput(globals(),True)
+    out=StreamOutput()
+    err=StreamError()
+    hb=QHBoxLayout()
+    vb.addLayout(hb)
+    hb.addWidget(in_)
+    #hb.addWidget(out)
+    #hb.addWidget(err)
+    # sys.stdout=out
+    #sys.stderr=err
+    w.show()
+    
+    #use camera_panel.cameras[i].camera_feed.saveImage(name=None)
+    
     try:
         app.exec_()
     finally:
